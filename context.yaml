@@ -1,0 +1,73 @@
+$schema: https://raw.githubusercontent.com/context-hub/generator/refs/heads/main/json-schema.json
+
+# CTX configuration for neth-agent
+# A Go application that fetches configuration from external sources and injects into child process
+documents:
+  - description: "Main entry point and CLI interface"
+    outputPath: main_and_cli.md
+    overwrite: true
+    tags: [entry, cli, parsing]
+    sources:
+      - type: tree
+        description: "Entry point and command parsing"
+        sourcePaths: ["cmd", "internal/cli"]
+        filePattern: "*.go"
+        maxDepth: 3
+        showSize: true
+        showCharCount: true
+        notPath: ["**/*_test.go"]
+
+  - description: "Process runner, execution, and signal handling"
+    outputPath: runner.md
+    overwrite: true
+    tags: [execution, signals, process]
+    sources:
+      - type: tree
+        description: "Runner implementation with Unix and Windows signal handling"
+        sourcePaths: ["internal/runner"]
+        filePattern: "*.go"
+        maxDepth: 2
+        showSize: true
+        showCharCount: true
+        notPath: ["**/*_test.go"]
+
+  - description: "Configuration and environment handling"
+    outputPath: config.md
+    overwrite: true
+    tags: [config, environment, state]
+    sources:
+      - type: tree
+        description: "Configuration sources and environment file handling"
+        sourcePaths: ["internal/config"]
+        filePattern: "*.go"
+        maxDepth: 2
+        showSize: true
+        showCharCount: true
+        notPath: ["**/*_test.go"]
+
+  - description: "Tests and test coverage"
+    outputPath: tests.md
+    overwrite: true
+    tags: [tests, coverage]
+    sources:
+      - type: tree
+        description: "Test files across all packages"
+        sourcePaths: ["cmd", "internal"]
+        filePattern: "*_test.go"
+        maxDepth: 3
+        showSize: true
+        showCharCount: true
+
+  - description: "Project configuration and CI/CD"
+    outputPath: config_files.md
+    overwrite: true
+    tags: [config, ci]
+    sources:
+      - type: tree
+        description: "Go modules, GitHub workflows, and configuration"
+        sourcePaths: ["."]
+        filePattern: "*.md,*.yaml,*.yml,*.mod,*.sum"
+        maxDepth: 2
+        showSize: true
+        showCharCount: true
+        notPath: [".context/**", ".git/**"]
