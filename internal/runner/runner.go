@@ -65,8 +65,7 @@ func Run(ctx context.Context, fetcher EnvFetcher, lg logger.Logger, cfg RunConfi
 
 	cmd := commandContext(ctx, cfg.Command, cfg.Args...)
 	if cfg.InjectEnv {
-		baseEnv := envToMap(os.Environ())
-		cmd.Env = MergeEnv(baseEnv, env, lg)
+		cmd.Env = MergeEnv(os.Environ(), env, lg)
 		lg.Debug("Environment variables injected")
 	}
 	configureCmdStdio(cmd)
