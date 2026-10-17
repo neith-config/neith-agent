@@ -179,6 +179,17 @@ func (c *HubSSEClient) connect(ctx context.Context, onConfig func(map[string]str
 	})
 }
 
+func sseDataValue(line string) (string, bool) {
+	if !strings.HasPrefix(line, "data:") {
+		return "", false
+	}
+	value := strings.TrimPrefix(line, "data:")
+	if strings.HasPrefix(value, " ") {
+		value = value[1:]
+	}
+	return value, true
+}
+
 // connectEvents opens one SSE connection and passes each complete event to
 // onEvent. The callback returns true only when the event was accepted. Any SSE
 // line, including a comment heartbeat, resets the idle timer; the stream has no
@@ -224,11 +235,11 @@ func (c *HubSSEClient) connectEvents(ctx context.Context, onEvent func(string) b
 		}
 		line := scanner.Text()
 
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data, ok := sseDataValue(line); ok {
 			dataLines = append(dataLines, data)
 		} else if line == "" && len(dataLines) > 0 {
-			combined := strings.Join(dataLines, "")
+			// SSE joins consecutive data fields with a newline before dispatch.
+			combined := strings.Join(dataLines, "\n")
 			dataLines = dataLines[:0]
 
 			if onEvent(combined) {
