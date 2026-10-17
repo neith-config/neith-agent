@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -306,8 +307,27 @@ func (a *Agent) writeConfigAtomically(config map[string]string) error {
 	}
 
 	tempFile := a.configFile + ".tmp"
-	if err := os.WriteFile(tempFile, data, 0o600); err != nil {
+	file, err := os.OpenFile(tempFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create temporary config file: %w", err)
+	}
+
+	removeTemp := func() {
+		_ = file.Close()
+		a.osRemove(tempFile)
+	}
+	written, err := file.Write(data)
+	if err != nil {
+		removeTemp()
 		return fmt.Errorf("write temp file: %w", err)
+	}
+	if written != len(data) {
+		removeTemp()
+		return fmt.Errorf("write temp file: %w", io.ErrShortWrite)
+	}
+	if err := file.Close(); err != nil {
+		a.osRemove(tempFile)
+		return fmt.Errorf("close temp file: %w", err)
 	}
 
 	if err := a.osRename(tempFile, a.configFile); err != nil {

@@ -239,6 +239,32 @@ func TestRun(t *testing.T) {
 	})
 }
 
+func TestRunRejectsPathLikeServiceIdentity(t *testing.T) {
+	for _, serviceName := range []string{"../escape", "nested/name", "."} {
+		t.Run(serviceName, func(t *testing.T) {
+			oldOpen := osOpenFile
+			defer func() { osOpenFile = oldOpen }()
+
+			opened := false
+			osOpenFile = func(_ string, _ int, _ os.FileMode) (*os.File, error) {
+				opened = true
+				return nil, errors.New("version file must not be opened")
+			}
+			t.Setenv("NEITH_HUB_URL", "http://hub")
+			t.Setenv("NEITH_TOKEN", "tok")
+			t.Setenv("NEITH_SERVICE", serviceName)
+
+			var stderr bytes.Buffer
+			if code := run([]string{"--", "echo", "hi"}, &stderr); code != 1 {
+				t.Fatalf("expected setup failure, got %d", code)
+			}
+			if opened {
+				t.Fatal("opened version file for invalid service identity")
+			}
+		})
+	}
+}
+
 func TestRunUsesPrivateVersionFileMode(t *testing.T) {
 	oldOpen := osOpenFile
 	defer func() { osOpenFile = oldOpen }()
