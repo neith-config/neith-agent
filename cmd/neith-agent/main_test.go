@@ -47,8 +47,9 @@ func (f *fakeSSE) StreamSnapshots(ctx context.Context, _ func(agent.Snapshot)) e
 // fakeVersionStore implements agent.VersionStore for tests.
 type fakeVersionStore struct{}
 
-func (f *fakeVersionStore) Store(_ int64) {}
-func (f *fakeVersionStore) Close() error  { return nil }
+func (f *fakeVersionStore) Current() int64 { return 0 }
+func (f *fakeVersionStore) Store(_ int64)  {}
+func (f *fakeVersionStore) Close() error   { return nil }
 
 func TestRun(t *testing.T) {
 	oldRunRunner := runRunner

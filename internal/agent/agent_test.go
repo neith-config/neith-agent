@@ -84,11 +84,19 @@ func (f *fakeSSESubscriber) StreamSnapshots(ctx context.Context, onSnapshot func
 // fakeVersionStore records the most recent Store call for assertion.
 type fakeVersionStore struct {
 	lastStored atomic.Int64
+	current    atomic.Int64
 	closed     atomic.Bool
 }
 
-func (f *fakeVersionStore) Store(v int64) { f.lastStored.Store(v) }
-func (f *fakeVersionStore) Close() error  { f.closed.Store(true); return nil }
+func (f *fakeVersionStore) Current() int64 {
+	return f.current.Load()
+}
+
+func (f *fakeVersionStore) Store(v int64) {
+	f.lastStored.Store(v)
+	f.current.Store(v)
+}
+func (f *fakeVersionStore) Close() error { f.closed.Store(true); return nil }
 
 func newTestAgent(cfg AgentConfig) (*Agent, *fakeFetcher, *fakeSSESubscriber, *fakeVersionStore, *testLogger) {
 	fetcher := &fakeFetcher{config: map[string]string{"TEST": "value"}}
@@ -317,6 +325,47 @@ func TestAgentApplyConfigNoChange(t *testing.T) {
 	a.applyConfig(map[string]string{"K": "V"})
 	if a.GetCurrentVersion() != v1 {
 		t.Fatalf("expected version unchanged at %d, got %d", v1, a.GetCurrentVersion())
+	}
+}
+
+func TestAgentContinuesPublicationVersionAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "version")
+	openStore := func() VersionStore {
+		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+		if err != nil {
+			t.Fatalf("open version file: %v", err)
+		}
+		store, err := NewVersionStore(f)
+		if err != nil {
+			_ = f.Close()
+			t.Fatalf("NewVersionStore: %v", err)
+		}
+		return store
+	}
+
+	firstStore := openStore()
+	first := NewAgent(AgentConfig{ServiceName: "restart-one"}, nil, nil, firstStore, &testLogger{})
+	first.configFile = filepath.Join(t.TempDir(), "first.json")
+	first.applyConfig(map[string]string{"VERSION": "first"})
+	if got := first.GetCurrentVersion(); got != 1 {
+		t.Fatalf("expected first publication version 1, got %d", got)
+	}
+	if err := firstStore.Close(); err != nil {
+		t.Fatalf("close first version store: %v", err)
+	}
+
+	secondStore := openStore()
+	second := NewAgent(AgentConfig{ServiceName: "restart-two"}, nil, nil, secondStore, &testLogger{})
+	second.configFile = filepath.Join(t.TempDir(), "second.json")
+	second.applyConfig(map[string]string{"VERSION": "second"})
+	if got := second.GetCurrentVersion(); got != 2 {
+		t.Fatalf("expected reopened publication version 2, got %d", got)
+	}
+	if got := secondStore.Current(); got != 2 {
+		t.Fatalf("expected durable publication version 2, got %d", got)
+	}
+	if err := secondStore.Close(); err != nil {
+		t.Fatalf("close second version store: %v", err)
 	}
 }
 

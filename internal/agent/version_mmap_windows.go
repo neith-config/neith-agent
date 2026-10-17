@@ -36,6 +36,10 @@ func NewVersionStore(f *os.File) (VersionStore, error) {
 	return &windowsVersionStore{f: f, handle: h, addr: addr}, nil
 }
 
+func (s *windowsVersionStore) Current() int64 {
+	return atomic.LoadInt64((*int64)(unsafe.Pointer(s.addr)))
+}
+
 func (s *windowsVersionStore) Store(version int64) {
 	atomic.StoreInt64((*int64)(unsafe.Pointer(s.addr)), version)
 }

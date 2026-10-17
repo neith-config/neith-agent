@@ -48,9 +48,11 @@ type SSESubscriber interface {
 	StreamSnapshots(ctx context.Context, onSnapshot func(Snapshot)) error
 }
 
-// VersionStore writes a version counter to a persistent backing store.
-// NewVersionStore returns the platform-specific implementation; tests inject a fake.
+// VersionStore loads and writes the publication version in a persistent
+// backing store. NewVersionStore returns the platform-specific implementation;
+// tests inject a fake.
 type VersionStore interface {
+	Current() int64
 	Store(version int64)
 	Close() error
 }
@@ -120,8 +122,12 @@ func NewAgent(cfg AgentConfig, pollClient SnapshotFetcher, sseClient SSESubscrib
 	}
 
 	configFile := filepath.Join(shmDir(), fmt.Sprintf(ConfigFileName, cfg.ServiceName))
+	initialVersion := int64(0)
+	if verStore != nil {
+		initialVersion = verStore.Current()
+	}
 
-	return &Agent{
+	a := &Agent{
 		config:        cfg,
 		pollClient:    pollClient,
 		sseClient:     sseClient,
@@ -137,6 +143,8 @@ func NewAgent(cfg AgentConfig, pollClient SnapshotFetcher, sseClient SSESubscrib
 		osRemove:      os.Remove,
 		jsonMarshalFn: json.Marshal,
 	}
+	a.version.Store(initialVersion)
+	return a
 }
 
 func (a *Agent) Run(ctx context.Context) error {
