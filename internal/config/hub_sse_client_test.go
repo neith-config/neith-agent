@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,10 +16,10 @@ import (
 
 type noOpLogger struct{}
 
-func (noOpLogger) Debug(string)            {}
-func (noOpLogger) Info(string)             {}
-func (noOpLogger) Warning(string)          {}
-func (noOpLogger) Error(string, error)     {}
+func (noOpLogger) Debug(string)        {}
+func (noOpLogger) Info(string)         {}
+func (noOpLogger) Warning(string)      {}
+func (noOpLogger) Error(string, error) {}
 
 func noOpSleep(_ context.Context, _ time.Duration) {}
 
@@ -528,9 +529,9 @@ type fakeScanner struct {
 	err   error
 }
 
-func (f *fakeScanner) Scan() bool  { return f.pos < len(f.lines) }
+func (f *fakeScanner) Scan() bool   { return f.pos < len(f.lines) }
 func (f *fakeScanner) Text() string { line := f.lines[f.pos]; f.pos++; return line }
-func (f *fakeScanner) Err() error  { return f.err }
+func (f *fakeScanner) Err() error   { return f.err }
 
 func TestHubSSEClientStreamContextCancelledDuringScan(t *testing.T) {
 	t.Parallel()
@@ -577,4 +578,36 @@ func TestHubSSEClientStreamScannerError(t *testing.T) {
 		return &fakeScanner{err: scanErr}
 	}
 	c.Stream(ctx, func(map[string]string) {}) //nolint
+}
+
+func TestHubSSEClientSnapshotAndLegacyParseErrors(t *testing.T) {
+	body := io.NopCloser(strings.NewReader("data: not-json\n\n"))
+	client := &http.Client{Transport: sseRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
+	})}
+	c := NewHubSSEClient("http://hub", "tok", client, noOpLogger{}, noOpSleep, fixedJitter)
+	if ok, err := c.connect(context.Background(), func(map[string]string) {}); err != nil || ok {
+		t.Fatalf("legacy parse: %v, %v", ok, err)
+	}
+	body = io.NopCloser(strings.NewReader("data: not-json\n\n"))
+	ctx, cancel := context.WithCancel(context.Background())
+	c.sleepFn = func(context.Context, time.Duration) { cancel() }
+	if err := c.StreamSnapshots(ctx, func(Snapshot) {}); err == nil {
+		t.Fatal("expected cancelled snapshot stream")
+	}
+}
+
+func TestHubSSEClientLegacyConnectValidEvent(t *testing.T) {
+	body := io.NopCloser(strings.NewReader("data: {\"A\":\"B\"}\n\n"))
+	c := NewHubSSEClient("http://hub", "tok", &http.Client{Transport: sseRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: body, Header: make(http.Header)}, nil
+	})}, noOpLogger{}, noOpSleep, fixedJitter)
+	ok, err := c.connect(context.Background(), func(cfg map[string]string) {
+		if cfg["A"] != "B" {
+			t.Fatal(cfg)
+		}
+	})
+	if err != nil || !ok {
+		t.Fatalf("connect = %v, %v", ok, err)
+	}
 }

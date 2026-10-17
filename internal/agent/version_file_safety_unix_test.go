@@ -37,3 +37,14 @@ func TestValidateVersionFileRejectsNonRegularFile(t *testing.T) {
 		t.Fatal("accepted directory as version file")
 	}
 }
+
+func TestValidateVersionFileAcceptsOwnedRegularFile(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := ValidateVersionFile(f); err != nil {
+		t.Fatal(err)
+	}
+}

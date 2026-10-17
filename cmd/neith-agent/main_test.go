@@ -254,6 +254,22 @@ func TestRun(t *testing.T) {
 	})
 }
 
+func TestRunRejectsNonRegularVersionFile(t *testing.T) {
+	oldOpen := osOpenFile
+	defer func() { osOpenFile = oldOpen }()
+	f, err := os.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	osOpenFile = func(string, int, os.FileMode) (*os.File, error) { return f, nil }
+	t.Setenv("NEITH_TOKEN", "tok")
+	var stderr bytes.Buffer
+	if code := run([]string{"--", "true"}, &stderr); code != 1 {
+		t.Fatalf("got %d", code)
+	}
+}
+
 func TestRunRejectsPathLikeServiceIdentity(t *testing.T) {
 	for _, serviceName := range []string{"../escape", "nested/name", "."} {
 		t.Run(serviceName, func(t *testing.T) {

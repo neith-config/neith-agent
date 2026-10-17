@@ -391,3 +391,10 @@ func TestParseCommand(t *testing.T) {
 		}
 	})
 }
+
+func TestParseCommandRejectsConflictingDaemonFlags(t *testing.T) {
+	_, err := ParseCommand([]string{"--no-json-output", "--json-output", "/tmp/env.json"})
+	if err != ErrConflictingFlags {
+		t.Fatalf("expected conflict, got %v", err)
+	}
+}

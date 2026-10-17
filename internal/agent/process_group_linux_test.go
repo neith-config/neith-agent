@@ -119,3 +119,14 @@ func linuxProcessLive(pid int) bool {
 	fields := strings.Fields(string(data))
 	return len(fields) > 2 && fields[2] != "Z" && syscall.Kill(pid, 0) == nil
 }
+
+func TestSignalChildProcessNonUnixSignal(t *testing.T) {
+	if err := signalChildProcess(&os.Process{}, fakeAgentSignal{}); err == nil {
+		t.Fatal("expected signal error")
+	}
+}
+
+type fakeAgentSignal struct{}
+
+func (fakeAgentSignal) String() string { return "fake" }
+func (fakeAgentSignal) Signal()        {}

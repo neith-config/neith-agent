@@ -70,6 +70,11 @@ func (e *ChildExitError) Error() string {
 	return fmt.Sprintf("child process exited with status %d", e.Code)
 }
 
+type atomicConfigFile interface {
+	Write([]byte) (int, error)
+	Close() error
+}
+
 type Agent struct {
 	config           AgentConfig
 	pollClient       SnapshotFetcher
@@ -84,7 +89,9 @@ type Agent struct {
 	acceptedRevision *Revision
 	osRename         func(string, string) error
 	osRemove         func(string) error
+	openConfigFile   func(string, int, os.FileMode) (atomicConfigFile, error)
 	jsonMarshalFn    func(any) ([]byte, error)
+	defaultJSONPath  func() (string, error)
 
 	childCmd         string
 	childArgs        []string
@@ -93,6 +100,8 @@ type Agent struct {
 	childDone        chan struct{}
 	childWaitStarted bool
 	startProcess     func(*exec.Cmd) error
+	waitProcess      func(*os.Process) (*os.ProcessState, error)
+	killProcess      func(*os.Process) error
 }
 
 type AgentConfig struct {
@@ -132,20 +141,26 @@ func NewAgent(cfg AgentConfig, pollClient SnapshotFetcher, sseClient SSESubscrib
 	}
 
 	a := &Agent{
-		config:        cfg,
-		pollClient:    pollClient,
-		sseClient:     sseClient,
-		verStore:      verStore,
-		logger:        lg,
-		configFile:    configFile,
-		snapshot:      make(map[string]string),
-		childCmd:      cfg.Command,
-		childArgs:     cfg.Args,
-		childDone:     make(chan struct{}),
-		startProcess:  func(cmd *exec.Cmd) error { return cmd.Start() },
-		osRename:      os.Rename,
-		osRemove:      os.Remove,
-		jsonMarshalFn: json.Marshal,
+		config:       cfg,
+		pollClient:   pollClient,
+		sseClient:    sseClient,
+		verStore:     verStore,
+		logger:       lg,
+		configFile:   configFile,
+		snapshot:     make(map[string]string),
+		childCmd:     cfg.Command,
+		childArgs:    cfg.Args,
+		childDone:    make(chan struct{}),
+		startProcess: func(cmd *exec.Cmd) error { return cmd.Start() },
+		waitProcess:  func(p *os.Process) (*os.ProcessState, error) { return p.Wait() },
+		killProcess:  killChildProcess,
+		osRename:     os.Rename,
+		osRemove:     os.Remove,
+		openConfigFile: func(name string, flag int, perm os.FileMode) (atomicConfigFile, error) {
+			return os.OpenFile(name, flag, perm)
+		},
+		jsonMarshalFn:   json.Marshal,
+		defaultJSONPath: runner.DefaultEnvFilePath,
 	}
 	a.version.Store(initialVersion)
 	return a
@@ -214,9 +229,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		a.logger.Info("Context cancelled")
 	case runErr = <-childResult:
-		if ctx.Err() != nil {
-			runErr = nil
-		}
+		runErr = childCompletionResult(ctx, runErr)
 	}
 
 	a.logger.Info("Shutting down...")
@@ -226,6 +239,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.logger.Info("Shutdown complete")
 
 	return runErr
+}
+
+func childCompletionResult(ctx context.Context, result error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return result
 }
 
 func (a *Agent) runSSEStream(ctx context.Context) {
@@ -393,7 +413,7 @@ func (a *Agent) writeJSONOutput(config map[string]string) error {
 	path := a.config.JSONOutputPath
 	if path == "" {
 		var err error
-		path, err = runner.DefaultEnvFilePath()
+		path, err = a.defaultJSONPath()
 		if err != nil {
 			return fmt.Errorf("resolve JSON output path: %w", err)
 		}
@@ -412,7 +432,7 @@ func (a *Agent) writeConfigAtomically(config map[string]string) error {
 	}
 
 	tempFile := a.configFile + ".tmp"
-	file, err := os.OpenFile(tempFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	file, err := a.openConfigFile(tempFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create temporary config file: %w", err)
 	}
@@ -518,7 +538,7 @@ func (a *Agent) waitForChildProcess() error {
 	process := a.childProcess
 	a.childMu.Unlock()
 
-	state, err := process.Wait()
+	state, err := a.waitProcess(process)
 
 	a.childMu.Lock()
 	a.childProcess = nil
@@ -578,7 +598,7 @@ func (a *Agent) stopChildProcess() {
 	a.childMu.Unlock()
 	if process != nil {
 		a.logger.Warning(fmt.Sprintf("Child process %d did not exit within %v, sending SIGKILL", process.Pid, a.config.StopDelay))
-		if err := killChildProcess(process); err != nil {
+		if err := a.killProcess(process); err != nil {
 			a.logger.Error("Failed to kill child process group", err)
 		}
 	}

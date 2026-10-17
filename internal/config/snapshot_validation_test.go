@@ -24,3 +24,25 @@ func TestParseSnapshotEnvelopeRejectsUnsupportedShapesAndValues(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotParserRejectsMalformedJSONDetails(t *testing.T) {
+	for _, body := range []string{
+		`{"revision":"018f0000-0000-7000-8000-00000000000z","config":{}}`,
+		`{"revision":"018f0000-0000-7000-8000-000000000001","config":{}} {}`,
+		`{"revision":"018f0000-0000-7000-8000-000000000001","config":{"1BAD":"x"}}`,
+		`{"revision":"018f0000-0000-7000-8000-000000000001","config":{"A":"x\u0000y"}}`,
+	} {
+		if _, err := parseSnapshotEnvelope([]byte(body)); err == nil {
+			t.Errorf("accepted %s", body)
+		}
+	}
+	if _, err := parseConfigMap([]byte(`null`)); err == nil {
+		t.Fatal("accepted null config")
+	}
+}
+
+func TestConfigNamesRejectEmpty(t *testing.T) {
+	if _, err := parseConfigMap([]byte(`{"":"value"}`)); err == nil {
+		t.Fatal("accepted empty environment name")
+	}
+}

@@ -67,6 +67,7 @@ var runRunner = runner.Run
 var osExit = os.Exit
 var osOpenFile = os.OpenFile
 var agentNewVersionStore = agent.NewVersionStore
+var versionFileChmod = func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) }
 
 func main() {
 	osExit(run(os.Args[1:], os.Stderr))
@@ -119,7 +120,7 @@ func runWithUnifiedMode(args []string, stderr io.Writer, runMode func(cli.Option
 		_ = vFile.Close()
 		return 1
 	}
-	if err := vFile.Chmod(0o600); err != nil {
+	if err := versionFileChmod(vFile, 0o600); err != nil {
 		lg.Error("Failed to restrict version file permissions", err)
 		_ = vFile.Close()
 		return 1

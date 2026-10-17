@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,6 +24,7 @@ type testLogger struct {
 	infos    []string
 	warnings []string
 	errors   []string
+	infoCh   chan string
 }
 
 func (tl *testLogger) Debug(msg string) {
@@ -32,8 +34,14 @@ func (tl *testLogger) Debug(msg string) {
 }
 func (tl *testLogger) Info(msg string) {
 	tl.mu.Lock()
-	defer tl.mu.Unlock()
 	tl.infos = append(tl.infos, msg)
+	if tl.infoCh != nil {
+		select {
+		case tl.infoCh <- msg:
+		default:
+		}
+	}
+	tl.mu.Unlock()
 }
 func (tl *testLogger) Warning(msg string) {
 	tl.mu.Lock()
@@ -141,7 +149,7 @@ func newTestAgent(cfg AgentConfig) (*Agent, *fakeFetcher, *fakeSSESubscriber, *f
 	fetcher := &fakeFetcher{config: map[string]string{"TEST": "value"}}
 	sse := &fakeSSESubscriber{config: map[string]string{"SSE_KEY": "SSE_VALUE"}}
 	vs := &fakeVersionStore{}
-	lg := &testLogger{}
+	lg := &testLogger{infoCh: make(chan string, 32)}
 	a := NewAgent(cfg, fetcher, sse, vs, lg)
 	return a, fetcher, sse, vs, lg
 }
@@ -771,7 +779,7 @@ func TestAgentShmDir(t *testing.T) {
 func TestAgentRun(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	a, _, _, vs, _ := newTestAgent(AgentConfig{ServiceName: "run-test", PollInterval: 1})
+	a, _, _, vs, lg := newTestAgent(AgentConfig{ServiceName: "run-test", PollInterval: 1})
 	a.configFile = filepath.Join(dir, "config.json")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -781,6 +789,7 @@ func TestAgentRun(t *testing.T) {
 	go func() { done <- a.Run(ctx) }()
 
 	waitForTestFetcherCalls(t, a.pollClient.(*fakeFetcher), 1)
+	waitForTestInfo(t, lg, "Config updated to version")
 	cancel()
 
 	select {
@@ -872,7 +881,7 @@ func TestAgentRunWithChild(t *testing.T) {
 		t.Skip("child process test uses unix commands")
 	}
 	dir := t.TempDir()
-	a, _, _, _, _ := newTestAgent(AgentConfig{
+	a, _, _, _, lg := newTestAgent(AgentConfig{
 		ServiceName:  "run-child-test",
 		PollInterval: 1,
 		Command:      "echo",
@@ -888,6 +897,7 @@ func TestAgentRunWithChild(t *testing.T) {
 	go func() { done <- a.Run(ctx) }()
 
 	waitForTestFetcherCalls(t, a.pollClient.(*fakeFetcher), 1)
+	waitForTestInfo(t, lg, "Config updated to version")
 	cancel()
 
 	select {
@@ -1303,6 +1313,22 @@ func TestAgentRunCancellationAfterChildLaunch(t *testing.T) {
 	defer a.childMu.Unlock()
 	if a.childProcess != nil {
 		t.Fatalf("child process remained tracked after cancellation: %d", a.childProcess.Pid)
+	}
+}
+
+func waitForTestInfo(t *testing.T, lg *testLogger, prefix string) {
+	t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case msg := <-lg.infoCh:
+			if strings.HasPrefix(msg, prefix) {
+				return
+			}
+		case <-deadline.C:
+			t.Fatalf("logger did not receive info message %q", prefix)
+		}
 	}
 }
 

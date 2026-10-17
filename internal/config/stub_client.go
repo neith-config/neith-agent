@@ -30,16 +30,23 @@ func NewStubClient(ctx context.Context) *StubClient {
 func (c *StubClient) run(ctx context.Context) {
 	ticker := time.NewTicker(StubPollInterval)
 	defer ticker.Stop()
+	runStubClient(ctx, c, ticker.C, nil)
+}
+
+func runStubClient(ctx context.Context, c *StubClient, ticks <-chan time.Time, onUpdate func()) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticks:
 			c.version.Add(1)
 			snapshot := c.buildSnapshot()
 			c.mu.Lock()
 			c.config = snapshot
 			c.mu.Unlock()
+			if onUpdate != nil {
+				onUpdate()
+			}
 		}
 	}
 }

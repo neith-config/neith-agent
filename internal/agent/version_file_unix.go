@@ -15,6 +15,8 @@ func VersionFileOpenFlags() int {
 	return unix.O_NOFOLLOW
 }
 
+var unixFstat = unix.Fstat
+
 // ValidateVersionFile rejects non-regular files and files owned by another
 // local principal before the version store maps them.
 func ValidateVersionFile(f *os.File) error {
@@ -27,7 +29,7 @@ func ValidateVersionFile(f *os.File) error {
 	}
 
 	var stat unix.Stat_t
-	if err := unix.Fstat(int(f.Fd()), &stat); err != nil {
+	if err := unixFstat(int(f.Fd()), &stat); err != nil {
 		return fmt.Errorf("stat version file owner: %w", err)
 	}
 	if stat.Uid != uint32(unix.Getuid()) {
