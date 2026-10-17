@@ -10,13 +10,11 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
 
 var execCommand = exec.Command
-var syscallKill = syscall.Kill
 
 // testLogger records log calls for assertion in tests.
 type testLogger struct {
@@ -1354,7 +1352,7 @@ func TestAgentRunSignal(t *testing.T) {
 
 	waitForTestFetcherCalls(t, a.pollClient.(*fakeFetcher), 1)
 	// Run() registered signal.Notify before bootstrap; SIGTERM goes to sigCh.
-	syscallKill(os.Getpid(), syscall.SIGTERM)
+	signalTestProcess(os.Getpid())
 
 	select {
 	case err := <-done:
