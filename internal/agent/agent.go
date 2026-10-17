@@ -21,11 +21,12 @@ import (
 )
 
 const (
-	DefaultHubURL       = "http://localhost:8080"
-	DefaultPollInterval = 5 // seconds
-	DefaultStopDelay    = 5 * time.Second
-	ConfigFileName      = "neith-%s.json"
-	VersionFileName     = "neith-%s.version"
+	DefaultHubURL          = "http://localhost:8080"
+	DefaultPollInterval    = 5 // seconds
+	DefaultStopDelay       = 5 * time.Second
+	maxPollIntervalSeconds = int64((time.Duration(1<<63-1) / 5 * 4) / time.Second)
+	ConfigFileName         = "neith-%s.json"
+	VersionFileName        = "neith-%s.version"
 )
 
 // Snapshot and Revision are the transport metadata accepted by the live
@@ -239,8 +240,19 @@ func (a *Agent) applySnapshotFromTransport(snapshot Snapshot) {
 	}
 }
 
+func pollIntervalDuration(seconds int) (time.Duration, bool) {
+	if seconds < 1 || int64(seconds) > maxPollIntervalSeconds {
+		return 0, false
+	}
+	return time.Duration(seconds) * time.Second, true
+}
+
 func (a *Agent) runJitterPolling(ctx context.Context) {
-	baseInterval := time.Duration(a.config.PollInterval) * time.Second
+	baseInterval, ok := pollIntervalDuration(a.config.PollInterval)
+	if !ok {
+		a.logger.Error("Invalid poll interval", fmt.Errorf("%d seconds is outside the supported range", a.config.PollInterval))
+		return
+	}
 
 	for {
 		select {
@@ -249,7 +261,7 @@ func (a *Agent) runJitterPolling(ctx context.Context) {
 		default:
 		}
 
-		jitter := time.Duration(rand.Intn(int(baseInterval/2))) - time.Duration(int(baseInterval/4))
+		jitter := time.Duration(rand.Int63n(int64(baseInterval/2))) - baseInterval/4
 		nextPoll := baseInterval + jitter
 
 		a.logger.Debug(fmt.Sprintf("Next jitter poll in %v", nextPoll))

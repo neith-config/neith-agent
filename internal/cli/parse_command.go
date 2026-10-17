@@ -2,7 +2,9 @@ package cli
 
 import (
 	"errors"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type Options struct {
@@ -14,6 +16,9 @@ type Options struct {
 	Verbose        bool
 	Version        bool
 	Help           bool
+	HubURL         string
+	Token          string
+	PollInterval   int
 }
 
 var ErrMissingSeparator = errors.New("missing -- separator")
@@ -21,6 +26,8 @@ var ErrMissingCommand = errors.New("missing command after --")
 var ErrUnknownFlag = errors.New("unknown flag")
 var ErrMissingFlagValue = errors.New("missing value for flag")
 var ErrConflictingFlags = errors.New("conflicting flags")
+
+const maxPollIntervalSeconds = int64((time.Duration(1<<63-1) / 5 * 4) / time.Second)
 
 func ParseCommand(args []string) (Options, error) {
 	var opts Options
@@ -93,9 +100,57 @@ func applyFlag(opts *Options, flag string, args []string, idx *int) error {
 	case "--help", "-h":
 		opts.Help = true
 		return nil
+	case "--hub-url":
+		if *idx+1 >= len(args) {
+			return ErrMissingFlagValue
+		}
+		if args[*idx+1] == "--" {
+			return ErrMissingFlagValue
+		}
+		*idx = *idx + 1
+		opts.HubURL = args[*idx]
+		return nil
+	case "--token":
+		if *idx+1 >= len(args) {
+			return ErrMissingFlagValue
+		}
+		if args[*idx+1] == "--" {
+			return ErrMissingFlagValue
+		}
+		*idx = *idx + 1
+		opts.Token = args[*idx]
+		return nil
+	case "--poll-interval":
+		if *idx+1 >= len(args) {
+			return ErrMissingFlagValue
+		}
+		if args[*idx+1] == "--" {
+			return ErrMissingFlagValue
+		}
+		*idx = *idx + 1
+		var err error
+		opts.PollInterval, err = parsePollInterval(args[*idx])
+		if err != nil {
+			return err
+		}
+		return nil
 	default:
 		return ErrUnknownFlag
 	}
+}
+
+func parsePollInterval(s string) (int, error) {
+	val, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, errors.New("invalid poll interval: must be a number")
+	}
+	if val < 1 {
+		return 0, errors.New("invalid poll interval: must be >= 1 second")
+	}
+	if int64(val) > maxPollIntervalSeconds {
+		return 0, errors.New("invalid poll interval: exceeds supported duration")
+	}
+	return val, nil
 }
 
 func isFlag(arg string) bool {
