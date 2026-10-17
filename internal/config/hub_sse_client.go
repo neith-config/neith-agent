@@ -15,7 +15,11 @@ import (
 	"github.com/neith-config/neith-agent/internal/logger"
 )
 
-const DefaultSSEIdleTimeout = 2 * time.Minute
+const (
+	DefaultSSEIdleTimeout   = 2 * time.Minute
+	MaxSnapshotPayloadBytes = 1 << 20
+	maxSSELineBytes         = MaxSnapshotPayloadBytes + len("data: ") + 1
+)
 
 var errSSEIdleTimeout = errors.New("SSE stream idle timeout")
 
@@ -89,7 +93,11 @@ func NewHubSSEClient(
 		delayFactor:  2.0,
 		idleTimeout:  DefaultSSEIdleTimeout,
 		newIdleTimer: newSSEIdleTimer,
-		newScanner:   func(r io.Reader) lineScanner { return bufio.NewScanner(r) },
+		newScanner: func(r io.Reader) lineScanner {
+			scanner := bufio.NewScanner(r)
+			scanner.Buffer(make([]byte, 64*1024), maxSSELineBytes)
+			return scanner
+		},
 	}
 }
 

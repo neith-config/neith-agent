@@ -66,9 +66,12 @@ func (c *HubHTTPClient) fetchBody(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	body, err := readAll(resp.Body)
+	body, err := readAll(io.LimitReader(resp.Body, MaxSnapshotPayloadBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
+	}
+	if len(body) > MaxSnapshotPayloadBytes {
+		return nil, fmt.Errorf("response payload exceeds %d bytes", MaxSnapshotPayloadBytes)
 	}
 	return body, nil
 }
