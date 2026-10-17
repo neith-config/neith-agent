@@ -55,8 +55,12 @@ func ParseCommand(args []string) (Options, error) {
 		}
 		return Options{}, ErrMissingSeparator
 	}
+	// No separator means daemon-only mode; a child command is optional.
 	if sep == -1 {
-		return Options{}, ErrMissingSeparator
+		if opts.NoEnvFile && opts.JsonOutputPath != "" {
+			return Options{}, ErrConflictingFlags
+		}
+		return opts, nil
 	}
 	if sep == len(args)-1 {
 		return Options{}, ErrMissingCommand
@@ -65,7 +69,7 @@ func ParseCommand(args []string) (Options, error) {
 	opts.Command = args[sep+1]
 	opts.CommandArgs = args[sep+2:]
 
-	// Check for conflicting flags
+	// Check for conflicting flags.
 	if opts.NoEnvFile && opts.JsonOutputPath != "" {
 		return Options{}, ErrConflictingFlags
 	}

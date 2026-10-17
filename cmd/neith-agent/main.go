@@ -42,6 +42,8 @@ FLAGS:
   --version               Print version and exit
   --help, -h              Show this help message
 
+Explicit Hub/token flags override NEITH_HUB_URL/NEITH_TOKEN environment values.
+
 MODES:
   neith-agent [FLAGS]                    # Daemon mode only
   neith-agent [FLAGS] -- COMMAND [ARGS...] # Daemon + child process
@@ -91,10 +93,10 @@ func run(args []string, stderr io.Writer) int {
 
 	lg := logger.NewLogger(opts.Verbose)
 
-	hubURL := getEnvOrDefault("NEITH_HUB_URL", opts.HubURL)
-	token := getEnvOrDefault("NEITH_TOKEN", opts.Token)
-	if hubURL == "" || token == "" {
-		_, _ = fmt.Fprintln(stderr, "NEITH_HUB_URL and NEITH_TOKEN are required")
+	hubURL := resolveHubURL(opts.HubURL)
+	token := resolveToken(opts.Token)
+	if token == "" {
+		_, _ = fmt.Fprintln(stderr, "NEITH_TOKEN is required")
 		return 1
 	}
 
@@ -181,6 +183,23 @@ func newStreamingHTTPClient() *http.Client {
 	transport.ResponseHeaderTimeout = DefaultConfigFetchTimeout
 	transport.ExpectContinueTimeout = DefaultConfigFetchTimeout
 	return &http.Client{Transport: transport}
+}
+
+func resolveHubURL(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if value := os.Getenv("NEITH_HUB_URL"); value != "" {
+		return value
+	}
+	return agent.DefaultHubURL
+}
+
+func resolveToken(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return os.Getenv("NEITH_TOKEN")
 }
 
 func getEnvOrDefault(envKey, defaultValue string) string {

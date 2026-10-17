@@ -160,16 +160,10 @@ func TestRun(t *testing.T) {
 		}
 	})
 
-	t.Run("missing hub url", func(t *testing.T) {
+	t.Run("missing hub url uses default", func(t *testing.T) {
 		os.Unsetenv("NEITH_HUB_URL")
-		os.Unsetenv("NEITH_TOKEN")
-		var stderr bytes.Buffer
-		code := run([]string{"--token", "tok", "--", "echo", "hi"}, &stderr)
-		if code != 1 {
-			t.Fatalf("expected 1, got %d", code)
-		}
-		if !strings.Contains(stderr.String(), "NEITH_HUB_URL") {
-			t.Fatalf("expected error mentioning NEITH_HUB_URL, got %q", stderr.String())
+		if got := resolveHubURL(""); got != agent.DefaultHubURL {
+			t.Fatalf("Hub URL default = %q, want %q", got, agent.DefaultHubURL)
 		}
 	})
 
@@ -181,8 +175,8 @@ func TestRun(t *testing.T) {
 		if code != 1 {
 			t.Fatalf("expected 1, got %d", code)
 		}
-		if !strings.Contains(stderr.String(), "NEITH_HUB_URL") {
-			t.Fatalf("expected error about missing credentials, got %q", stderr.String())
+		if !strings.Contains(stderr.String(), "NEITH_TOKEN") {
+			t.Fatalf("expected error about missing token, got %q", stderr.String())
 		}
 	})
 
@@ -394,7 +388,7 @@ func TestRunUnifiedModeHonorsJSONOutputFlags(t *testing.T) {
 func TestRunUnifiedMode(t *testing.T) {
 	t.Run("daemon starts and runs", func(t *testing.T) {
 		opts := cli.Options{
-			NoEnvFile:   true,
+			NoEnvFile:    true,
 			PollInterval: 5,
 		}
 
@@ -477,11 +471,11 @@ func TestRunDaemonModeIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	_, err := cli.ParseCommand([]string{"--hub-url", "http://test.com"})
-	if err == nil {
-		t.Fatal("expected error for daemon mode without separator")
+	opts, err := cli.ParseCommand([]string{"--hub-url", "http://test.com"})
+	if err != nil {
+		t.Fatalf("expected daemon mode without a child command, got %v", err)
 	}
-	if err.Error() != "missing -- separator" {
-		t.Fatalf("expected separator error, got %v", err)
+	if opts.Command != "" || opts.HubURL != "http://test.com" {
+		t.Fatalf("unexpected daemon options: %#v", opts)
 	}
 }
