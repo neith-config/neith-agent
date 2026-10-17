@@ -311,9 +311,53 @@ func TestAgentApplyConfigWriteError(t *testing.T) {
 
 	a.applyConfig(map[string]string{"K": "V"})
 
-	// Version is incremented before the file write — check that error was logged
+	// Failed publication must not advance the accepted state or version.
+	if a.GetCurrentVersion() != 0 || len(a.GetCurrentConfig()) != 0 {
+		t.Fatalf("failed publication changed accepted state: version=%d config=%v", a.GetCurrentVersion(), a.GetCurrentConfig())
+	}
 	if len(lg.errors) == 0 {
 		t.Fatal("expected an error to be logged when config write fails")
+	}
+}
+
+func TestAgentApplyConfigRetriesAfterPublicationFailure(t *testing.T) {
+	dir := t.TempDir()
+	a, _, _, vs, _ := newTestAgent(AgentConfig{ServiceName: "retry-publication"})
+	a.configFile = filepath.Join(dir, "config.json")
+
+	a.applyConfig(map[string]string{"OLD": "value"})
+	if a.GetCurrentVersion() != 1 {
+		t.Fatalf("expected initial version 1, got %d", a.GetCurrentVersion())
+	}
+
+	attempts := 0
+	a.osRename = func(oldPath, newPath string) error {
+		attempts++
+		if attempts == 1 {
+			return fmt.Errorf("injected rename failure")
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	update := map[string]string{"NEW": "value"}
+	a.applyConfig(update)
+
+	if a.GetCurrentVersion() != 1 || a.GetCurrentConfig()["OLD"] != "value" {
+		t.Fatalf("failed publication changed accepted state: version=%d config=%v", a.GetCurrentVersion(), a.GetCurrentConfig())
+	}
+	if got := vs.lastStored.Load(); got != 1 {
+		t.Fatalf("failed publication changed stored version: got %d", got)
+	}
+
+	a.applyConfig(update)
+
+	if attempts != 2 {
+		t.Fatalf("expected retry after identical update, got %d rename attempts", attempts)
+	}
+	if a.GetCurrentVersion() != 2 || a.GetCurrentConfig()["NEW"] != "value" {
+		t.Fatalf("retry did not commit accepted state: version=%d config=%v", a.GetCurrentVersion(), a.GetCurrentConfig())
+	}
+	if got := vs.lastStored.Load(); got != 2 {
+		t.Fatalf("retry did not publish version 2: got %d", got)
 	}
 }
 
