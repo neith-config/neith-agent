@@ -3,7 +3,6 @@ package config
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -106,8 +105,8 @@ func NewHubSSEClient(
 // Stream returns only when ctx is cancelled.
 func (c *HubSSEClient) Stream(ctx context.Context, onConfig func(map[string]string)) error {
 	return c.stream(ctx, func(data string) bool {
-		var cfg map[string]string
-		if err := json.Unmarshal([]byte(data), &cfg); err != nil {
+		cfg, err := parseConfigMap([]byte(data))
+		if err != nil {
 			c.logger.Error("SSE event parse error", err)
 			return false
 		}
@@ -169,8 +168,8 @@ func (c *HubSSEClient) stream(ctx context.Context, onEvent func(string) bool) er
 // connection closes or ctx is cancelled.
 func (c *HubSSEClient) connect(ctx context.Context, onConfig func(map[string]string)) (bool, error) {
 	return c.connectEvents(ctx, func(data string) bool {
-		var cfg map[string]string
-		if err := json.Unmarshal([]byte(data), &cfg); err != nil {
+		cfg, err := parseConfigMap([]byte(data))
+		if err != nil {
 			c.logger.Error("SSE event parse error", err)
 			return false
 		}
@@ -215,6 +214,7 @@ func (c *HubSSEClient) connectEvents(ctx context.Context, onEvent func(string) b
 
 	receivedOne := false
 	var dataLines []string
+	dataSize := 0
 	var idle atomic.Bool
 	var idleTimer sseIdleTimer
 	if c.idleTimeout > 0 && c.newIdleTimer != nil {
@@ -236,17 +236,27 @@ func (c *HubSSEClient) connectEvents(ctx context.Context, onEvent func(string) b
 		line := scanner.Text()
 
 		if data, ok := sseDataValue(line); ok {
+			lineSize := len(data)
+			if len(dataLines) > 0 {
+				lineSize++ // SSE inserts a newline between data fields.
+			}
+			if dataSize+lineSize > MaxSnapshotPayloadBytes {
+				return receivedOne, fmt.Errorf("SSE event payload exceeds %d bytes", MaxSnapshotPayloadBytes)
+			}
 			dataLines = append(dataLines, data)
+			dataSize += lineSize
 		} else if line == "" && len(dataLines) > 0 {
 			// SSE joins consecutive data fields with a newline before dispatch.
 			combined := strings.Join(dataLines, "\n")
 			dataLines = dataLines[:0]
+			dataSize = 0
 
 			if onEvent(combined) {
 				receivedOne = true
 			}
 		} else if line == "" {
 			dataLines = dataLines[:0]
+			dataSize = 0
 		}
 	}
 

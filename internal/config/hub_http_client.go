@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,8 +31,8 @@ func (c *HubHTTPClient) Fetch(ctx context.Context) (map[string]string, error) {
 		return nil, err
 	}
 
-	var result map[string]string
-	if err := json.Unmarshal(body, &result); err != nil {
+	result, err := parseConfigMap(body)
+	if err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 	return result, nil

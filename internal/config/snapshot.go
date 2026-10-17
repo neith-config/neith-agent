@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 )
 
 // Revision is a UUIDv7 Hub revision. Its byte order is the UUID wire order,
@@ -62,8 +64,13 @@ func parseSnapshotEnvelope(body []byte) (Snapshot, error) {
 		Revision string            `json:"revision"`
 		Config   map[string]string `json:"config"`
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
 		return Snapshot{}, fmt.Errorf("parse snapshot envelope: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return Snapshot{}, fmt.Errorf("parse snapshot envelope: trailing JSON data")
 	}
 	if envelope.Config == nil {
 		return Snapshot{}, fmt.Errorf("snapshot config must be an object")
@@ -72,9 +79,52 @@ func parseSnapshotEnvelope(body []byte) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	config := make(map[string]string, len(envelope.Config))
-	for key, value := range envelope.Config {
-		config[key] = value
+	config, err := cloneAndValidateConfig(envelope.Config)
+	if err != nil {
+		return Snapshot{}, err
 	}
 	return Snapshot{Revision: revision, Config: config}, nil
+}
+
+func parseConfigMap(body []byte) (map[string]string, error) {
+	var config map[string]string
+	if err := json.Unmarshal(body, &config); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if config == nil {
+		return nil, fmt.Errorf("config must be an object")
+	}
+	return cloneAndValidateConfig(config)
+}
+
+func cloneAndValidateConfig(config map[string]string) (map[string]string, error) {
+	cloned := make(map[string]string, len(config))
+	for key, value := range config {
+		if !isValidConfigName(key) {
+			return nil, fmt.Errorf("invalid environment variable name %q", key)
+		}
+		if strings.IndexByte(value, 0) >= 0 {
+			return nil, fmt.Errorf("environment variable %q contains NUL", key)
+		}
+		cloned[key] = value
+	}
+	return cloned, nil
+}
+
+func isValidConfigName(name string) bool {
+	if len(name) == 0 {
+		return false
+	}
+	isLetter := func(c byte) bool {
+		return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+	}
+	if !isLetter(name[0]) && name[0] != '_' {
+		return false
+	}
+	for i := 1; i < len(name); i++ {
+		if !isLetter(name[i]) && (name[i] < '0' || name[i] > '9') && name[i] != '_' {
+			return false
+		}
+	}
+	return true
 }
