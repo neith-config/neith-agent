@@ -188,12 +188,13 @@ func TestAgentConfigChanged(t *testing.T) {
 
 	a, _, _, _, _ := newTestAgent(AgentConfig{ServiceName: "test"})
 
-	if a.configChanged(map[string]string{}) {
-		t.Fatal("expected no change for empty vs empty")
+	if !a.configChanged(map[string]string{}) {
+		t.Fatal("expected an uninitialized empty config to be treated as a change")
 	}
 
 	a.mu.Lock()
 	a.snapshot = map[string]string{"A": "1", "B": "2"}
+	a.initialized = true
 	a.mu.Unlock()
 
 	if a.configChanged(map[string]string{"A": "1", "B": "2"}) {
@@ -204,6 +205,90 @@ func TestAgentConfigChanged(t *testing.T) {
 	}
 	if !a.configChanged(map[string]string{"A": "1", "B": "2", "C": "3"}) {
 		t.Fatal("expected change for additional key")
+	}
+}
+
+func TestAgentApplyConfigDistinguishesMissingAndEmpty(t *testing.T) {
+	t.Parallel()
+
+	a, _, _, _, _ := newTestAgent(AgentConfig{ServiceName: "presence"})
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+
+	a.applyConfig(map[string]string{"REMOVED": ""})
+	a.applyConfig(map[string]string{"ADDED": ""})
+
+	if got := a.GetCurrentVersion(); got != 2 {
+		t.Fatalf("expected missing-to-empty key replacement to publish version 2, got %d", got)
+	}
+	config := a.GetCurrentConfig()
+	if _, ok := config["REMOVED"]; ok {
+		t.Fatalf("removed key remained in config: %v", config)
+	}
+	if value, ok := config["ADDED"]; !ok || value != "" {
+		t.Fatalf("present empty key missing from config: %v", config)
+	}
+}
+
+func TestAgentAppliesFirstAuthoritativeEmptySnapshot(t *testing.T) {
+	t.Parallel()
+
+	a, _, _, _, _ := newTestAgent(AgentConfig{ServiceName: "first-empty"})
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(a.configFile, []byte(`{"STALE":"secret"}`), 0o600); err != nil {
+		t.Fatalf("seed stale config file: %v", err)
+	}
+	snapshot := Snapshot{
+		Revision: mustTestRevision(t, "018f0000-0000-7000-8000-000000000001"),
+		Config:   map[string]string{},
+	}
+
+	if err := a.applySnapshot(snapshot, false); err != nil {
+		t.Fatalf("apply first empty snapshot: %v", err)
+	}
+	if got := a.GetCurrentVersion(); got != 1 {
+		t.Fatalf("expected first empty snapshot to publish version 1, got %d", got)
+	}
+	content, err := os.ReadFile(a.configFile)
+	if err != nil {
+		t.Fatalf("read first empty snapshot file: %v", err)
+	}
+	var config map[string]string
+	if err := json.Unmarshal(content, &config); err != nil {
+		t.Fatalf("parse first empty snapshot file: %v", err)
+	}
+	if len(config) != 0 {
+		t.Fatalf("expected stale config to be replaced by empty snapshot, got %v", config)
+	}
+}
+
+func TestAgentEquivalentSnapshotsAreIdempotent(t *testing.T) {
+	t.Parallel()
+
+	a, _, _, _, _ := newTestAgent(AgentConfig{ServiceName: "idempotent"})
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+	first := Snapshot{
+		Revision: mustTestRevision(t, "018f0000-0000-7000-8000-000000000001"),
+		Config:   map[string]string{"KEY": "value"},
+	}
+	newerEquivalent := Snapshot{
+		Revision: mustTestRevision(t, "018f0000-0000-7000-8000-000000000002"),
+		Config:   map[string]string{"KEY": "value"},
+	}
+
+	if err := a.applySnapshot(first, false); err != nil {
+		t.Fatalf("apply first snapshot: %v", err)
+	}
+	if err := a.applySnapshot(newerEquivalent, false); err != nil {
+		t.Fatalf("apply equivalent newer snapshot: %v", err)
+	}
+	if err := a.applySnapshot(newerEquivalent, false); err != nil {
+		t.Fatalf("apply repeated equivalent snapshot: %v", err)
+	}
+	if got := a.GetCurrentVersion(); got != 1 {
+		t.Fatalf("expected equivalent snapshots to publish once, got version %d", got)
+	}
+	if a.acceptedRevision == nil || a.acceptedRevision.Compare(newerEquivalent.Revision) != 0 {
+		t.Fatalf("expected newer equivalent revision to be accepted, got %v", a.acceptedRevision)
 	}
 }
 

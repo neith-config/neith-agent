@@ -79,6 +79,7 @@ type Agent struct {
 	configFile       string
 	mu               sync.RWMutex
 	snapshot         map[string]string
+	initialized      bool
 	acceptedRevision *Revision
 	osRename         func(string, string) error
 	osRemove         func(string) error
@@ -306,6 +307,7 @@ func (a *Agent) applySnapshot(snapshot Snapshot, force bool) error {
 	}
 
 	a.snapshot = snapshot.Config
+	a.initialized = true
 	revision := snapshot.Revision
 	a.acceptedRevision = &revision
 	newVersion := a.version.Add(1)
@@ -327,6 +329,7 @@ func (a *Agent) applyConfigResult(newConfig map[string]string, force bool) error
 	}
 
 	a.snapshot = newConfig
+	a.initialized = true
 	newVersion := a.version.Add(1)
 	a.writeVersionCounter(newVersion)
 	a.logger.Info(fmt.Sprintf("Config updated to version %d with %d variables", newVersion, len(newConfig)))
@@ -347,11 +350,15 @@ func (a *Agent) fetchAndUpdateConfig(ctx context.Context) {
 }
 
 func (a *Agent) configChanged(newConfig map[string]string) bool {
+	if !a.initialized {
+		return true
+	}
 	if len(a.snapshot) != len(newConfig) {
 		return true
 	}
 	for k, v := range a.snapshot {
-		if newConfig[k] != v {
+		newValue, ok := newConfig[k]
+		if !ok || newValue != v {
 			return true
 		}
 	}
