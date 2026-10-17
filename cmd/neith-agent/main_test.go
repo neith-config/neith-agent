@@ -239,6 +239,27 @@ func TestRun(t *testing.T) {
 	})
 }
 
+func TestRunUsesPrivateVersionFileMode(t *testing.T) {
+	oldOpen := osOpenFile
+	defer func() { osOpenFile = oldOpen }()
+
+	var gotPerm os.FileMode
+	osOpenFile = func(_ string, _ int, perm os.FileMode) (*os.File, error) {
+		gotPerm = perm
+		return nil, errors.New("stop after mode capture")
+	}
+	t.Setenv("NEITH_HUB_URL", "http://hub")
+	t.Setenv("NEITH_TOKEN", "tok")
+
+	var stderr bytes.Buffer
+	if code := run([]string{"--", "echo", "hi"}, &stderr); code != 1 {
+		t.Fatalf("expected setup failure, got %d", code)
+	}
+	if gotPerm != 0o600 {
+		t.Fatalf("version file mode = %04o, want 0600", gotPerm)
+	}
+}
+
 func TestMain(t *testing.T) {
 	oldArgs := os.Args
 	oldExit := osExit

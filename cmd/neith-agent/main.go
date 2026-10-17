@@ -100,9 +100,14 @@ func run(args []string, stderr io.Writer) int {
 	serviceName := getEnvOrDefault("NEITH_SERVICE", "default")
 	versionFilePath := filepath.Join(agent.ShmDir(), fmt.Sprintf(agent.VersionFileName, serviceName))
 
-	vFile, err := osOpenFile(versionFilePath, os.O_RDWR|os.O_CREATE, 0o644)
+	vFile, err := osOpenFile(versionFilePath, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		lg.Error("Failed to open version file", err)
+		return 1
+	}
+	if err := vFile.Chmod(0o600); err != nil {
+		lg.Error("Failed to restrict version file permissions", err)
+		_ = vFile.Close()
 		return 1
 	}
 
