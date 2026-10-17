@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -127,9 +128,8 @@ func run(args []string, stderr io.Writer) int {
 		return 1
 	}
 
-	httpClient := &http.Client{Timeout: DefaultConfigFetchTimeout}
-	pollClient := config.NewHubHTTPClient(hubURL, token, httpClient)
-	sseClient := config.NewHubSSEClient(hubURL, token, httpClient, lg, config.DefaultSleep, rand.Float64)
+	pollClient := config.NewHubHTTPClient(hubURL, token, newPollingHTTPClient())
+	sseClient := config.NewHubSSEClient(hubURL, token, newStreamingHTTPClient(), lg, config.DefaultSleep, rand.Float64)
 
 	return runUnifiedModeFn(opts, hubURL, token, serviceName, lg, pollClient, sseClient, verStore)
 }
@@ -168,6 +168,19 @@ func runUnifiedMode(
 	}
 
 	return 0
+}
+
+func newPollingHTTPClient() *http.Client {
+	return &http.Client{Timeout: DefaultConfigFetchTimeout}
+}
+
+func newStreamingHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{Timeout: DefaultConfigFetchTimeout}).DialContext
+	transport.TLSHandshakeTimeout = DefaultConfigFetchTimeout
+	transport.ResponseHeaderTimeout = DefaultConfigFetchTimeout
+	transport.ExpectContinueTimeout = DefaultConfigFetchTimeout
+	return &http.Client{Transport: transport}
 }
 
 func getEnvOrDefault(envKey, defaultValue string) string {

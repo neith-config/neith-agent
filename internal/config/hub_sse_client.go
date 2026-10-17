@@ -4,15 +4,20 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/neith-config/neith-agent/internal/logger"
 )
 
+const DefaultSSEIdleTimeout = 2 * time.Minute
+
+var errSSEIdleTimeout = errors.New("SSE stream idle timeout")
 
 type lineScanner interface {
 	Scan() bool
@@ -32,6 +37,22 @@ func DefaultSleep(ctx context.Context, d time.Duration) {
 
 // HubSSEClient streams config updates from the Hub over Server-Sent Events.
 // On any disconnect it reconnects with exponential backoff + jitter.
+type sseIdleTimer interface {
+	Reset(time.Duration) bool
+	Stop() bool
+}
+
+type realSSEIdleTimer struct {
+	timer *time.Timer
+}
+
+func (t *realSSEIdleTimer) Reset(d time.Duration) bool { return t.timer.Reset(d) }
+func (t *realSSEIdleTimer) Stop() bool                 { return t.timer.Stop() }
+
+func newSSEIdleTimer(d time.Duration, onIdle func()) sseIdleTimer {
+	return &realSSEIdleTimer{timer: time.AfterFunc(d, onIdle)}
+}
+
 type HubSSEClient struct {
 	hubURL       string
 	token        string
@@ -42,6 +63,8 @@ type HubSSEClient struct {
 	initialDelay time.Duration
 	maxDelay     time.Duration
 	delayFactor  float64
+	idleTimeout  time.Duration
+	newIdleTimer func(time.Duration, func()) sseIdleTimer
 	newScanner   func(io.Reader) lineScanner
 }
 
@@ -64,6 +87,8 @@ func NewHubSSEClient(
 		initialDelay: time.Second,
 		maxDelay:     60 * time.Second,
 		delayFactor:  2.0,
+		idleTimeout:  DefaultSSEIdleTimeout,
+		newIdleTimer: newSSEIdleTimer,
 		newScanner:   func(r io.Reader) lineScanner { return bufio.NewScanner(r) },
 	}
 }
@@ -147,7 +172,9 @@ func (c *HubSSEClient) connect(ctx context.Context, onConfig func(map[string]str
 }
 
 // connectEvents opens one SSE connection and passes each complete event to
-// onEvent. The callback returns true only when the event was accepted.
+// onEvent. The callback returns true only when the event was accepted. Any SSE
+// line, including a comment heartbeat, resets the idle timer; the stream has no
+// total lifetime limit and ends on cancellation, disconnect, or idle timeout.
 func (c *HubSSEClient) connectEvents(ctx context.Context, onEvent func(string) bool) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.hubURL+"/sse/v1/stream", nil)
 	if err != nil {
@@ -169,11 +196,23 @@ func (c *HubSSEClient) connectEvents(ctx context.Context, onEvent func(string) b
 
 	receivedOne := false
 	var dataLines []string
+	var idle atomic.Bool
+	var idleTimer sseIdleTimer
+	if c.idleTimeout > 0 && c.newIdleTimer != nil {
+		idleTimer = c.newIdleTimer(c.idleTimeout, func() {
+			idle.Store(true)
+			_ = resp.Body.Close()
+		})
+		defer idleTimer.Stop()
+	}
 
 	scanner := c.newScanner(resp.Body)
 	for scanner.Scan() {
 		if ctx.Err() != nil {
 			return receivedOne, nil
+		}
+		if idleTimer != nil {
+			idleTimer.Reset(c.idleTimeout)
 		}
 		line := scanner.Text()
 
@@ -192,6 +231,9 @@ func (c *HubSSEClient) connectEvents(ctx context.Context, onEvent func(string) b
 		}
 	}
 
+	if idle.Load() {
+		return receivedOne, fmt.Errorf("%w after %v", errSSEIdleTimeout, c.idleTimeout)
+	}
 	if err := scanner.Err(); err != nil {
 		return receivedOne, fmt.Errorf("read SSE stream: %w", err)
 	}

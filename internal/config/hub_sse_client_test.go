@@ -223,6 +223,121 @@ func TestHubSSEClientStreamMalformedJSONSkipped(t *testing.T) {
 	}
 }
 
+type manualSSEIdleTimer struct {
+	onIdle  func()
+	resets  int
+	stopped bool
+}
+
+func (t *manualSSEIdleTimer) Reset(time.Duration) bool {
+	t.resets++
+	return true
+}
+
+func (t *manualSSEIdleTimer) Stop() bool {
+	t.stopped = true
+	return true
+}
+
+func (t *manualSSEIdleTimer) Fire() {
+	t.onIdle()
+}
+
+type blockingSSEBody struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (b *blockingSSEBody) Read([]byte) (int, error) {
+	<-b.closed
+	return 0, io.EOF
+}
+
+func (b *blockingSSEBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
+type sseRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f sseRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestHubSSEClientIdleTimeoutClosesStream(t *testing.T) {
+	t.Parallel()
+
+	body := &blockingSSEBody{closed: make(chan struct{})}
+	timerCreated := make(chan *manualSSEIdleTimer, 1)
+	client := &http.Client{Transport: sseRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       body,
+			Header:     make(http.Header),
+		}, nil
+	})}
+	c := NewHubSSEClient("http://hub", "tok", client, noOpLogger{}, noOpSleep, fixedJitter)
+	c.idleTimeout = time.Hour
+	c.newIdleTimer = func(_ time.Duration, onIdle func()) sseIdleTimer {
+		timer := &manualSSEIdleTimer{onIdle: onIdle}
+		timerCreated <- timer
+		return timer
+	}
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := c.connectEvents(context.Background(), func(string) bool { return true })
+		result <- err
+	}()
+
+	timer := <-timerCreated
+	timer.Fire()
+	if err := <-result; err == nil || !errors.Is(err, errSSEIdleTimeout) {
+		t.Fatalf("expected deterministic idle-timeout error, got %v", err)
+	}
+	if !timer.stopped {
+		t.Fatal("expected idle timer to stop after stream termination")
+	}
+}
+
+func TestHubSSEClientHeartbeatResetsIdleTimer(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	timer := &manualSSEIdleTimer{}
+	c := NewHubSSEClient(srv.URL, "tok", srv.Client(), noOpLogger{}, noOpSleep, fixedJitter)
+	c.idleTimeout = time.Hour
+	c.newIdleTimer = func(_ time.Duration, onIdle func()) sseIdleTimer {
+		timer.onIdle = onIdle
+		return timer
+	}
+	c.newScanner = func(io.Reader) lineScanner {
+		return &fakeScanner{lines: []string{": heartbeat", `data: {"K":"V"}`, ``}}
+	}
+
+	var received string
+	_, err := c.connectEvents(context.Background(), func(data string) bool {
+		received = data
+		return true
+	})
+	if err != nil {
+		t.Fatalf("connectEvents: %v", err)
+	}
+	if received != `{"K":"V"}` {
+		t.Fatalf("unexpected event payload %q", received)
+	}
+	if timer.resets != 3 {
+		t.Fatalf("idle timer resets = %d, want one per SSE line", timer.resets)
+	}
+	if !timer.stopped {
+		t.Fatal("expected idle timer to stop after stream termination")
+	}
+}
+
 func TestHubSSEClientStreamContextCancelled(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
