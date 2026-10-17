@@ -24,9 +24,32 @@ func NewHubHTTPClient(hubURL, token string, client *http.Client) *HubHTTPClient 
 	return &HubHTTPClient{hubURL: hubURL, token: token, client: client}
 }
 
-// Fetch requests the current config snapshot from the Hub and returns it as a
-// key-value map. It satisfies runner.EnvFetcher.
+// Fetch requests the legacy bare map response. The live agent uses
+// FetchSnapshot so it can preserve the Hub revision across transports.
 func (c *HubHTTPClient) Fetch(ctx context.Context) (map[string]string, error) {
+	body, err := c.fetchBody(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var result map[string]string
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	return result, nil
+}
+
+// FetchSnapshot requests the authoritative revisioned snapshot used by the
+// persistent agent lifecycle.
+func (c *HubHTTPClient) FetchSnapshot(ctx context.Context) (Snapshot, error) {
+	body, err := c.fetchBody(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return parseSnapshotEnvelope(body)
+}
+
+func (c *HubHTTPClient) fetchBody(ctx context.Context) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.hubURL+"/api/v1/snapshot", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -47,11 +70,5 @@ func (c *HubHTTPClient) Fetch(ctx context.Context) (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
 	}
-
-	var result map[string]string
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-
-	return result, nil
+	return body, nil
 }

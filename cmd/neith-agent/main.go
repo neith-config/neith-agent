@@ -138,7 +138,7 @@ func runUnifiedMode(
 	opts cli.Options,
 	hubURL, token, serviceName string,
 	lg logger.Logger,
-	pollClient runner.EnvFetcher,
+	pollClient agent.SnapshotFetcher,
 	sseClient agent.SSESubscriber,
 	verStore agent.VersionStore,
 ) int {

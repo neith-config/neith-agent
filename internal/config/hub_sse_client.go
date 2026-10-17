@@ -72,6 +72,33 @@ func NewHubSSEClient(
 // config event. It reconnects with exponential backoff+jitter on any disconnect.
 // Stream returns only when ctx is cancelled.
 func (c *HubSSEClient) Stream(ctx context.Context, onConfig func(map[string]string)) error {
+	return c.stream(ctx, func(data string) bool {
+		var cfg map[string]string
+		if err := json.Unmarshal([]byte(data), &cfg); err != nil {
+			c.logger.Error("SSE event parse error", err)
+			return false
+		}
+		onConfig(cfg)
+		return true
+	})
+}
+
+// StreamSnapshots streams revisioned Hub snapshots while preserving the
+// authoritative revision in each callback. The legacy Stream method remains
+// available for disconnected map-based runner components.
+func (c *HubSSEClient) StreamSnapshots(ctx context.Context, onSnapshot func(Snapshot)) error {
+	return c.stream(ctx, func(data string) bool {
+		snapshot, err := parseSnapshotEnvelope([]byte(data))
+		if err != nil {
+			c.logger.Error("SSE snapshot parse error", err)
+			return false
+		}
+		onSnapshot(snapshot)
+		return true
+	})
+}
+
+func (c *HubSSEClient) stream(ctx context.Context, onEvent func(string) bool) error {
 	delay := c.initialDelay
 
 	for {
@@ -79,7 +106,7 @@ func (c *HubSSEClient) Stream(ctx context.Context, onConfig func(map[string]stri
 			return ctx.Err()
 		}
 
-		receivedOne, err := c.connect(ctx, onConfig)
+		receivedOne, err := c.connectEvents(ctx, onEvent)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -105,9 +132,23 @@ func (c *HubSSEClient) Stream(ctx context.Context, onConfig func(map[string]stri
 	}
 }
 
-// connect opens one SSE connection and drains events until the connection closes
-// or ctx is cancelled. It returns whether at least one config event was received.
+// connect opens one SSE connection and drains legacy bare-map events until the
+// connection closes or ctx is cancelled.
 func (c *HubSSEClient) connect(ctx context.Context, onConfig func(map[string]string)) (bool, error) {
+	return c.connectEvents(ctx, func(data string) bool {
+		var cfg map[string]string
+		if err := json.Unmarshal([]byte(data), &cfg); err != nil {
+			c.logger.Error("SSE event parse error", err)
+			return false
+		}
+		onConfig(cfg)
+		return true
+	})
+}
+
+// connectEvents opens one SSE connection and passes each complete event to
+// onEvent. The callback returns true only when the event was accepted.
+func (c *HubSSEClient) connectEvents(ctx context.Context, onEvent func(string) bool) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.hubURL+"/sse/v1/stream", nil)
 	if err != nil {
 		return false, fmt.Errorf("create request: %w", err)
@@ -143,13 +184,9 @@ func (c *HubSSEClient) connect(ctx context.Context, onConfig func(map[string]str
 			combined := strings.Join(dataLines, "")
 			dataLines = dataLines[:0]
 
-			var cfg map[string]string
-			if err := json.Unmarshal([]byte(combined), &cfg); err != nil {
-				c.logger.Error("SSE event parse error", err)
-				continue
+			if onEvent(combined) {
+				receivedOne = true
 			}
-			onConfig(cfg)
-			receivedOne = true
 		} else if line == "" {
 			dataLines = dataLines[:0]
 		}

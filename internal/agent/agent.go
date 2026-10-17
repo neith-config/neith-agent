@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	hubconfig "github.com/neith-config/neith-agent/internal/config"
 	"github.com/neith-config/neith-agent/internal/logger"
 	"github.com/neith-config/neith-agent/internal/runner"
 )
@@ -27,11 +28,24 @@ const (
 	VersionFileName     = "neith-%s.version"
 )
 
+// Snapshot and Revision are the transport metadata accepted by the live
+// agent. Legacy map-based runner interfaces remain separate.
+type Snapshot = hubconfig.Snapshot
+type Revision = hubconfig.Revision
 
-// SSESubscriber streams config updates from a remote source. HubSSEClient
-// implements this interface; tests inject a fake.
+// ParseRevision is exposed here for focused agent tests and callers that keep
+// transport ordering decisions in the agent package.
+var ParseRevision = hubconfig.ParseRevision
+
+// SnapshotFetcher fetches an authoritative Hub snapshot.
+type SnapshotFetcher interface {
+	FetchSnapshot(ctx context.Context) (Snapshot, error)
+}
+
+// SSESubscriber streams authoritative Hub snapshots. HubSSEClient implements
+// this interface; tests inject a fake.
 type SSESubscriber interface {
-	Stream(ctx context.Context, onConfig func(map[string]string)) error
+	StreamSnapshots(ctx context.Context, onSnapshot func(Snapshot)) error
 }
 
 // VersionStore writes a version counter to a persistent backing store.
@@ -54,21 +68,22 @@ func (e *ChildExitError) Error() string {
 }
 
 type Agent struct {
-	config     AgentConfig
-	pollClient runner.EnvFetcher
-	sseClient  SSESubscriber
-	verStore   VersionStore
-	logger     logger.Logger
-	version    atomic.Int64
-	configFile string
-	mu           sync.RWMutex
-	snapshot     map[string]string
-	osRename     func(string, string) error
-	osRemove     func(string) error
-	jsonMarshalFn func(any) ([]byte, error)
+	config           AgentConfig
+	pollClient       SnapshotFetcher
+	sseClient        SSESubscriber
+	verStore         VersionStore
+	logger           logger.Logger
+	version          atomic.Int64
+	configFile       string
+	mu               sync.RWMutex
+	snapshot         map[string]string
+	acceptedRevision *Revision
+	osRename         func(string, string) error
+	osRemove         func(string) error
+	jsonMarshalFn    func(any) ([]byte, error)
 
-	childCmd     string
-	childArgs    []string
+	childCmd         string
+	childArgs        []string
 	childProcess     *os.Process
 	childMu          sync.Mutex
 	childDone        chan struct{}
@@ -90,7 +105,7 @@ type AgentConfig struct {
 
 // NewAgent creates an Agent. All dependencies are passed in; the constructor
 // does not create any resources itself.
-func NewAgent(cfg AgentConfig, pollClient runner.EnvFetcher, sseClient SSESubscriber, verStore VersionStore, lg logger.Logger) *Agent {
+func NewAgent(cfg AgentConfig, pollClient SnapshotFetcher, sseClient SSESubscriber, verStore VersionStore, lg logger.Logger) *Agent {
 	if cfg.HubURL == "" {
 		cfg.HubURL = DefaultHubURL
 	}
@@ -202,8 +217,14 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 func (a *Agent) runSSEStream(ctx context.Context) {
-	if err := a.sseClient.Stream(ctx, a.applyConfig); err != nil {
+	if err := a.sseClient.StreamSnapshots(ctx, a.applySnapshotFromTransport); err != nil {
 		a.logger.Error("SSE stream ended", err)
+	}
+}
+
+func (a *Agent) applySnapshotFromTransport(snapshot Snapshot) {
+	if err := a.applySnapshot(snapshot, false); err != nil {
+		a.logger.Error("Failed to apply configuration snapshot", err)
 	}
 }
 
@@ -237,11 +258,11 @@ func (a *Agent) bootstrapConfig(ctx context.Context) error {
 	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	newConfig, err := a.pollClient.Fetch(fetchCtx)
+	snapshot, err := a.pollClient.FetchSnapshot(fetchCtx)
 	if err != nil {
 		return fmt.Errorf("fetch initial configuration: %w", err)
 	}
-	if err := a.applyConfigResult(newConfig, true); err != nil {
+	if err := a.applySnapshot(snapshot, true); err != nil {
 		return fmt.Errorf("publish initial configuration: %w", err)
 	}
 	return nil
@@ -254,6 +275,35 @@ func (a *Agent) applyConfig(newConfig map[string]string) {
 	if err := a.applyConfigResult(newConfig, false); err != nil {
 		a.logger.Error("Failed to apply configuration", err)
 	}
+}
+
+// applySnapshot serializes publication from polling and SSE and rejects any
+// snapshot that is not newer than the last accepted Hub revision.
+func (a *Agent) applySnapshot(snapshot Snapshot, force bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if !force && a.acceptedRevision != nil && snapshot.Revision.Compare(*a.acceptedRevision) <= 0 {
+		return nil
+	}
+
+	if !force && !a.configChanged(snapshot.Config) {
+		revision := snapshot.Revision
+		a.acceptedRevision = &revision
+		return nil
+	}
+
+	if err := a.writeConfigAtomically(snapshot.Config); err != nil {
+		return err
+	}
+
+	a.snapshot = snapshot.Config
+	revision := snapshot.Revision
+	a.acceptedRevision = &revision
+	newVersion := a.version.Add(1)
+	a.writeVersionCounter(newVersion)
+	a.logger.Info(fmt.Sprintf("Config updated to version %d with %d variables", newVersion, len(snapshot.Config)))
+	return nil
 }
 
 func (a *Agent) applyConfigResult(newConfig map[string]string, force bool) error {
@@ -279,13 +329,13 @@ func (a *Agent) fetchAndUpdateConfig(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	newConfig, err := a.pollClient.Fetch(ctx)
+	snapshot, err := a.pollClient.FetchSnapshot(ctx)
 	if err != nil {
 		a.logger.Error("Failed to fetch config", err)
 		return
 	}
 
-	a.applyConfig(newConfig)
+	a.applySnapshotFromTransport(snapshot)
 }
 
 func (a *Agent) configChanged(newConfig map[string]string) bool {

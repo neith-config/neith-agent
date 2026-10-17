@@ -45,6 +45,27 @@ func TestHubHTTPClientFetchSuccess(t *testing.T) {
 	}
 }
 
+func TestHubHTTPClientFetchSnapshotSuccess(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/snapshot" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"revision":"018f0000-0000-7000-8000-000000000001","config":{"KEY":"VALUE"}}`)
+	}))
+	defer srv.Close()
+
+	c := NewHubHTTPClient(srv.URL, "tok", srv.Client())
+	got, err := c.FetchSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSnapshot: %v", err)
+	}
+	if got.Revision.String() != "018f0000-0000-7000-8000-000000000001" || got.Config["KEY"] != "VALUE" {
+		t.Fatalf("unexpected snapshot: %#v", got)
+	}
+}
+
 func TestHubHTTPClientFetchNonOKStatus(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

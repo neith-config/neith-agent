@@ -27,10 +27,19 @@ func (f *fakeFetcher) Fetch(_ context.Context) (map[string]string, error) {
 	return f.config, nil
 }
 
+func (f *fakeFetcher) FetchSnapshot(_ context.Context) (agent.Snapshot, error) {
+	return agent.Snapshot{Config: f.config}, nil
+}
+
 // fakeSSE implements agent.SSESubscriber for tests.
 type fakeSSE struct{}
 
 func (f *fakeSSE) Stream(ctx context.Context, _ func(map[string]string)) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (f *fakeSSE) StreamSnapshots(ctx context.Context, _ func(agent.Snapshot)) error {
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -224,7 +233,7 @@ func TestRun(t *testing.T) {
 
 		oldFn := runUnifiedModeFn
 		defer func() { runUnifiedModeFn = oldFn }()
-		runUnifiedModeFn = func(_ cli.Options, _, _, _ string, _ logger.Logger, _ runner.EnvFetcher, _ agent.SSESubscriber, _ agent.VersionStore) int {
+		runUnifiedModeFn = func(_ cli.Options, _, _, _ string, _ logger.Logger, _ agent.SnapshotFetcher, _ agent.SSESubscriber, _ agent.VersionStore) int {
 			return 0
 		}
 

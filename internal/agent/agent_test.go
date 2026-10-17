@@ -30,7 +30,8 @@ func (tl *testLogger) Info(msg string)             { tl.infos = append(tl.infos,
 func (tl *testLogger) Warning(msg string)          { tl.warnings = append(tl.warnings, msg) }
 func (tl *testLogger) Error(msg string, err error) { tl.errors = append(tl.errors, msg) }
 
-// fakeFetcher is a test-only runner.EnvFetcher.
+// fakeFetcher is a test-only implementation of the live snapshot fetcher; its
+// legacy Fetch method remains for older unit-test helpers.
 type fakeFetcher struct {
 	config map[string]string
 	err    error
@@ -40,6 +41,11 @@ type fakeFetcher struct {
 func (f *fakeFetcher) Fetch(_ context.Context) (map[string]string, error) {
 	f.calls.Add(1)
 	return f.config, f.err
+}
+
+func (f *fakeFetcher) FetchSnapshot(_ context.Context) (Snapshot, error) {
+	f.calls.Add(1)
+	return Snapshot{Config: f.config}, f.err
 }
 
 type cancelingFetcher struct {
@@ -52,6 +58,11 @@ func (f *cancelingFetcher) Fetch(_ context.Context) (map[string]string, error) {
 	return f.config, nil
 }
 
+func (f *cancelingFetcher) FetchSnapshot(_ context.Context) (Snapshot, error) {
+	f.cancel()
+	return Snapshot{Config: f.config}, nil
+}
+
 // fakeSSESubscriber calls onConfig once with the configured map then blocks
 // until ctx is cancelled.
 type fakeSSESubscriber struct {
@@ -60,6 +71,12 @@ type fakeSSESubscriber struct {
 
 func (f *fakeSSESubscriber) Stream(ctx context.Context, onConfig func(map[string]string)) error {
 	onConfig(f.config)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (f *fakeSSESubscriber) StreamSnapshots(ctx context.Context, onSnapshot func(Snapshot)) error {
+	onSnapshot(Snapshot{Config: f.config})
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -301,6 +318,56 @@ func TestAgentApplyConfigNoChange(t *testing.T) {
 	if a.GetCurrentVersion() != v1 {
 		t.Fatalf("expected version unchanged at %d, got %d", v1, a.GetCurrentVersion())
 	}
+}
+
+func TestAgentRejectsStaleOrEqualSnapshotRevision(t *testing.T) {
+	a, _, _, _, _ := newTestAgent(AgentConfig{ServiceName: "revision-order"})
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+
+	newer := Snapshot{
+		Revision: mustTestRevision(t, "018f0000-0000-7000-8000-000000000002"),
+		Config:   map[string]string{"VALUE": "new"},
+	}
+	older := Snapshot{
+		Revision: mustTestRevision(t, "018f0000-0000-7000-8000-000000000001"),
+		Config:   map[string]string{"VALUE": "old"},
+	}
+
+	if err := a.applySnapshot(newer, true); err != nil {
+		t.Fatalf("apply newer snapshot: %v", err)
+	}
+	if err := a.applySnapshot(older, false); err != nil {
+		t.Fatalf("apply older snapshot: %v", err)
+	}
+	if got := a.GetCurrentConfig()["VALUE"]; got != "new" {
+		t.Fatalf("stale snapshot replaced newer value: %q", got)
+	}
+	if got := a.GetCurrentVersion(); got != 1 {
+		t.Fatalf("stale snapshot advanced version to %d", got)
+	}
+
+	equal := Snapshot{
+		Revision: newer.Revision,
+		Config:   map[string]string{"VALUE": "equal-revision-different-payload"},
+	}
+	if err := a.applySnapshot(equal, false); err != nil {
+		t.Fatalf("apply equal snapshot: %v", err)
+	}
+	if got := a.GetCurrentConfig()["VALUE"]; got != "new" {
+		t.Fatalf("equal revision replaced accepted value: %q", got)
+	}
+	if got := a.GetCurrentVersion(); got != 1 {
+		t.Fatalf("equal revision advanced version to %d", got)
+	}
+}
+
+func mustTestRevision(t *testing.T, value string) Revision {
+	t.Helper()
+	revision, err := ParseRevision(value)
+	if err != nil {
+		t.Fatalf("parse revision %q: %v", value, err)
+	}
+	return revision
 }
 
 func TestAgentApplyConfigWriteError(t *testing.T) {

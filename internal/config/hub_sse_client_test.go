@@ -88,6 +88,32 @@ func TestHubSSEClientStreamSingleEvent(t *testing.T) {
 	}
 }
 
+func TestHubSSEClientStreamSnapshots(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprint(w, "data: {\"revision\":\"018f0000-0000-7000-8000-000000000001\",\"config\":{\"KEY\":\"VALUE\"}}\n\n")
+		flusher.Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c := NewHubSSEClient(srv.URL, "tok", srv.Client(), noOpLogger{}, noOpSleep, fixedJitter)
+
+	var received Snapshot
+	c.StreamSnapshots(ctx, func(snapshot Snapshot) {
+		received = snapshot
+		cancel()
+	})
+
+	if received.Revision.String() != "018f0000-0000-7000-8000-000000000001" || received.Config["KEY"] != "VALUE" {
+		t.Fatalf("unexpected snapshot: %#v", received)
+	}
+}
+
 func TestHubSSEClientStreamMultipleEvents(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
