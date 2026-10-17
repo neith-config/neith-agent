@@ -325,6 +325,23 @@ func TestRunUnifiedMode(t *testing.T) {
 		}
 	})
 
+	t.Run("child exit status is returned", func(t *testing.T) {
+		oldFn := agentRunFn
+		defer func() { agentRunFn = oldFn }()
+		agentRunFn = func(_ *agent.Agent) error { return &agent.ChildExitError{Code: 42} }
+
+		opts := cli.Options{PollInterval: 5}
+		code := runUnifiedMode(opts, "http://hub", "tok", "svc",
+			logger.NewLogger(false),
+			&fakeFetcher{config: map[string]string{}},
+			&fakeSSE{},
+			&fakeVersionStore{},
+		)
+		if code != 42 {
+			t.Fatalf("expected 42, got %d", code)
+		}
+	})
+
 	t.Run("agent run success returns 0", func(t *testing.T) {
 		oldFn := agentRunFn
 		defer func() { agentRunFn = oldFn }()

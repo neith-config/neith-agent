@@ -43,6 +43,15 @@ type VersionStore interface {
 // ShmDir returns the base directory used for shared-memory files.
 func ShmDir() string { return shmDir() }
 
+// ChildExitError reports a non-zero exit status from the supervised child.
+type ChildExitError struct {
+	Code int
+}
+
+func (e *ChildExitError) Error() string {
+	return fmt.Sprintf("child process exited with status %d", e.Code)
+}
+
 type Agent struct {
 	config     AgentConfig
 	pollClient runner.EnvFetcher
@@ -133,6 +142,15 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 
+	var childResult chan error
+	if a.childCmd != "" {
+		if err := a.startChildProcess(); err != nil {
+			a.logger.Error("Failed to start child process", err)
+			return err
+		}
+		childResult = make(chan error, 1)
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -146,24 +164,21 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.runJitterPolling(ctx)
 	}()
 
-	if a.childCmd != "" {
+	if childResult != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := a.startChildProcess(); err != nil {
-				a.logger.Error("Failed to start child process", err)
-				return
-			}
-			a.waitForChildProcess()
-			a.logger.Info("Child process finished, agent continues running")
+			childResult <- a.waitForChildProcess()
 		}()
 	}
 
+	var runErr error
 	select {
 	case sig := <-sigCh:
 		a.logger.Info("Received signal: " + sig.String())
 	case <-ctx.Done():
 		a.logger.Info("Context cancelled")
+	case runErr = <-childResult:
 	}
 
 	a.logger.Info("Shutting down...")
@@ -172,7 +187,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	wg.Wait()
 	a.logger.Info("Shutdown complete")
 
-	return nil
+	return runErr
 }
 
 func (a *Agent) runSSEStream(ctx context.Context) {
@@ -346,19 +361,16 @@ func (a *Agent) startChildProcess() error {
 	return nil
 }
 
-func (a *Agent) waitForChildProcess() {
+func (a *Agent) waitForChildProcess() error {
 	a.childMu.Lock()
 	process := a.childProcess
 	a.childMu.Unlock()
 
 	if process == nil {
-		return
+		return nil
 	}
 
 	state, err := process.Wait()
-	if err != nil {
-		a.logger.Error("Child process wait failed", err)
-	}
 
 	a.childMu.Lock()
 	a.childProcess = nil
@@ -366,9 +378,21 @@ func (a *Agent) waitForChildProcess() {
 
 	close(a.childDone)
 
-	if state != nil {
-		a.logger.Info(fmt.Sprintf("Child process exited with status: %d", state.ExitCode()))
+	if err != nil {
+		a.logger.Error("Child process wait failed", err)
+		return fmt.Errorf("wait for child process: %w", err)
 	}
+
+	if state == nil {
+		return fmt.Errorf("wait for child process: missing process state")
+	}
+
+	code := state.ExitCode()
+	a.logger.Info(fmt.Sprintf("Child process exited with status: %d", code))
+	if code != 0 {
+		return &ChildExitError{Code: code}
+	}
+	return nil
 }
 
 func (a *Agent) stopChildProcess() {

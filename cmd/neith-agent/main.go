@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -141,6 +142,11 @@ func runUnifiedMode(
 	agnt := agent.NewAgent(agentCfg, pollClient, sseClient, verStore, lg)
 
 	if err := agentRunFn(agnt); err != nil {
+		var childExit *agent.ChildExitError
+		if errors.As(err, &childExit) {
+			lg.Error("Child process exited", err)
+			return childExit.Code
+		}
 		lg.Error("Agent failed", err)
 		return 1
 	}

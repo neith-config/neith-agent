@@ -776,25 +776,53 @@ func TestAgentRunWithFailingChildStart(t *testing.T) {
 	})
 	a.configFile = filepath.Join(dir, "config.json")
 
-	ctx, cancel := context.WithCancel(context.Background())
-
 	done := make(chan error, 1)
-	go func() { done <- a.Run(ctx) }()
-
-	time.Sleep(150 * time.Millisecond)
-	cancel()
+	go func() { done <- a.Run(context.Background()) }()
 
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("Run() returned unexpected error: %v", err)
+		if err == nil {
+			t.Fatal("expected child start failure to be returned")
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("Run() did not stop in time")
+		t.Fatal("Run() did not return after child start failure")
 	}
 
 	if len(lg.errors) == 0 {
 		t.Fatal("expected child start failure to be logged")
+	}
+}
+
+func TestAgentRunPropagatesChildExit(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("child process test uses unix commands")
+	}
+
+	a, _, _, _, _ := newTestAgent(AgentConfig{
+		ServiceName: "exit-test",
+		Command:     "sh",
+		Args:        []string{"-c", "exit 42"},
+	})
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+
+	done := make(chan error, 1)
+	go func() { done <- a.Run(context.Background()) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected child exit status to be returned")
+		}
+		exitErr, ok := err.(*ChildExitError)
+		if !ok {
+			t.Fatalf("expected ChildExitError, got %T: %v", err, err)
+		}
+		if exitErr.Code != 42 {
+			t.Fatalf("expected child exit code 42, got %d", exitErr.Code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run() did not return after child exit")
 	}
 }
 
