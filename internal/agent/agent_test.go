@@ -482,6 +482,47 @@ func TestAgentRunRequiresInitialConfig(t *testing.T) {
 	}
 }
 
+func TestAgentConfigUpdateDoesNotRestartChild(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("child process test uses unix commands")
+	}
+
+	a, _, _, _, _ := newTestAgent(AgentConfig{
+		ServiceName: "no-restart-test",
+		Command:     "sleep",
+		Args:        []string{"10"},
+		StopDelay:   10 * time.Millisecond,
+	})
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+
+	if err := a.startChildProcess(); err != nil {
+		t.Fatalf("startChildProcess: %v", err)
+	}
+	waitDone := make(chan struct{})
+	go func() {
+		a.waitForChildProcess()
+		close(waitDone)
+	}()
+	t.Cleanup(func() {
+		a.stopChildProcess()
+		<-waitDone
+	})
+
+	a.childMu.Lock()
+	initialPID := a.childProcess.Pid
+	a.childMu.Unlock()
+
+	a.applyConfig(map[string]string{"UPDATED": "yes"})
+
+	a.childMu.Lock()
+	updatedPID := a.childProcess.Pid
+	a.childMu.Unlock()
+	if updatedPID != initialPID {
+		t.Fatalf("configuration update restarted child: initial PID %d, updated PID %d", initialPID, updatedPID)
+	}
+}
+
 func TestAgentRunWithChild(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
