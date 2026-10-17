@@ -282,11 +282,11 @@ echo $?  # 1 (permission denied, can't write /root/config.json)
 
 ## Platform-Specific Behavior
 
-### Unix/Linux Behavior
+### Linux Behavior (supported runtime)
 
 #### Signal Forwarding
 
-When you press Ctrl+C or send another signal to neith-agent, it forwards the signal to the child process **and its entire process group**.
+On the supported Linux runtime, when you press Ctrl+C or send another signal to neith-agent, it forwards the signal to the child process **and its entire process group**. Darwin builds are retained for cross-build verification only; no native Darwin runtime guarantee is made.
 
 **What this means**:
 - `Ctrl+C` kills the child and any grandchildren it spawned
@@ -304,22 +304,13 @@ $XDG_CONFIG_HOME/neith-agent/env.json
 ~/.config/neith-agent/env.json        (if XDG_CONFIG_HOME not set)
 ```
 
-### Windows Behavior
+### Windows Behavior (cross-build only)
 
 #### Signal Forwarding
 
-Windows doesn't support POSIX signals or process groups. Only `Ctrl+C` (os.Interrupt) is supported.
+The Windows target is retained for cross-build verification only. Neith does not claim native Windows signal delivery, graceful child shutdown, or process-tree termination. The Go `os.Process.Signal` path used by the implementation does not provide the Unix process-group semantics required for those guarantees, and native Windows behavior is not verified.
 
-**What this means**:
-- Pressing `Ctrl+C` sends `os.Interrupt` to the child process
-- Only direct children receive the signal
-- Grandchildren are not automatically terminated
-
-**Supported signals**: 
-- `os.Interrupt` (Ctrl+C) ✓
-- Other POSIX signals: Not supported
-
-**Workaround**: Use job objects or `taskkill` if you need to terminate process trees on Windows.
+Native Windows job-object or console-control mechanisms are outside the current support envelope. Do not rely on the Windows binary for graceful signal forwarding or child process-tree cleanup.
 
 #### File Paths
 
@@ -488,13 +479,13 @@ If the target command exists but isn't executable:
 
 ### Ctrl+C / Signal Handling
 
-When you press Ctrl+C:
+On the supported Linux runtime, when you press Ctrl+C:
 1. neith-agent receives the signal
-2. Signal is forwarded to the child process (and process group on Unix)
+2. Signal is forwarded to the child process and its process group
 3. Both neith-agent and child process terminate
-4. Exit code reflects the signal (often 130 for SIGINT, varies by OS)
+4. Exit code reflects the signal (often 130 for SIGINT)
 
-The mechanism is transparent — neith-agent itself doesn't "catch" Ctrl+C; it proxies signals.
+Darwin and Windows are cross-build-only targets in the current support envelope; no native signal-forwarding or graceful-stop guarantee is made there. The Linux mechanism is transparent — neith-agent itself doesn't "catch" Ctrl+C; it proxies signals.
 
 ---
 

@@ -21,7 +21,9 @@ func forwardSignals(cmd *exec.Cmd) func() {
 	}
 
 	sigCh := make(chan os.Signal, 16)
-	// Windows meaningfully supports only os.Interrupt in Go's signal package.
+	// Windows can notify this process about os.Interrupt, but this fallback
+	// path does not provide native child console-control or process-tree
+	// forwarding. Windows support remains cross-build-only.
 	signalNotify(sigCh, os.Interrupt)
 
 	done := make(chan struct{})
