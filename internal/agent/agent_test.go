@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -19,20 +20,48 @@ var syscallKill = syscall.Kill
 
 // testLogger records log calls for assertion in tests.
 type testLogger struct {
+	mu       sync.Mutex
 	debugs   []string
 	infos    []string
 	warnings []string
 	errors   []string
 }
 
-func (tl *testLogger) Debug(msg string)            { tl.debugs = append(tl.debugs, msg) }
-func (tl *testLogger) Info(msg string)             { tl.infos = append(tl.infos, msg) }
-func (tl *testLogger) Warning(msg string)          { tl.warnings = append(tl.warnings, msg) }
-func (tl *testLogger) Error(msg string, err error) { tl.errors = append(tl.errors, msg) }
+func (tl *testLogger) Debug(msg string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.debugs = append(tl.debugs, msg)
+}
+func (tl *testLogger) Info(msg string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.infos = append(tl.infos, msg)
+}
+func (tl *testLogger) Warning(msg string) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.warnings = append(tl.warnings, msg)
+}
+func (tl *testLogger) Error(msg string, err error) {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	tl.errors = append(tl.errors, msg)
+}
+func (tl *testLogger) ErrorCount() int {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	return len(tl.errors)
+}
+func (tl *testLogger) Errors() []string {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	return append([]string(nil), tl.errors...)
+}
 
 // fakeFetcher is a test-only implementation of the live snapshot fetcher; its
 // legacy Fetch method remains for older unit-test helpers.
 type fakeFetcher struct {
+	mu     sync.RWMutex
 	config map[string]string
 	err    error
 	calls  atomic.Int32
@@ -40,13 +69,25 @@ type fakeFetcher struct {
 
 func (f *fakeFetcher) Fetch(_ context.Context) (map[string]string, error) {
 	f.calls.Add(1)
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	return f.config, f.err
 }
 
 func (f *fakeFetcher) FetchSnapshot(_ context.Context) (Snapshot, error) {
 	f.calls.Add(1)
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	return Snapshot{Config: f.config}, f.err
 }
+
+func (f *fakeFetcher) SetError(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func (f *fakeFetcher) Calls() int32 { return f.calls.Load() }
 
 type cancelingFetcher struct {
 	config map[string]string
@@ -565,7 +606,7 @@ func TestAgentApplyConfigWriteError(t *testing.T) {
 	if a.GetCurrentVersion() != 0 || len(a.GetCurrentConfig()) != 0 {
 		t.Fatalf("failed publication changed accepted state: version=%d config=%v", a.GetCurrentVersion(), a.GetCurrentConfig())
 	}
-	if len(lg.errors) == 0 {
+	if lg.ErrorCount() == 0 {
 		t.Fatal("expected an error to be logged when config write fails")
 	}
 }
@@ -672,7 +713,7 @@ func TestAgentFetchAndUpdateConfigError(t *testing.T) {
 	t.Parallel()
 
 	a, fetcher, _, _, lg := newTestAgent(AgentConfig{ServiceName: "test"})
-	fetcher.err = fmt.Errorf("simulated fetch error") //nolint
+	fetcher.SetError(fmt.Errorf("simulated fetch error"))
 	a.configFile = filepath.Join(t.TempDir(), "config.json")
 
 	a.fetchAndUpdateConfig(context.Background())
@@ -680,7 +721,7 @@ func TestAgentFetchAndUpdateConfigError(t *testing.T) {
 	if a.GetCurrentVersion() != 0 {
 		t.Fatal("expected no version increment on fetch error")
 	}
-	if len(lg.errors) == 0 {
+	if lg.ErrorCount() == 0 {
 		t.Fatal("expected error to be logged")
 	}
 }
@@ -700,7 +741,6 @@ func TestAgentFetchAndUpdateConfigNoChange(t *testing.T) {
 		t.Fatalf("expected no version increment for unchanged config: got %d, want %d", a.GetCurrentVersion(), v1)
 	}
 }
-
 
 func TestAgentGetEnvOrDefault(t *testing.T) {
 	result := getEnvOrDefaultTestHelper("NON_EXISTENT_VAR", "default")
@@ -737,11 +777,12 @@ func TestAgentRun(t *testing.T) {
 	a.configFile = filepath.Join(dir, "config.json")
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
 
-	time.Sleep(50 * time.Millisecond)
+	waitForTestFetcherCalls(t, a.pollClient.(*fakeFetcher), 1)
 	cancel()
 
 	select {
@@ -778,7 +819,7 @@ func TestAgentRunRequiresInitialConfig(t *testing.T) {
 	if err := a.Run(ctx); err == nil {
 		t.Fatal("expected bootstrap failure before child or background workers start")
 	}
-	if got := fetcher.calls.Load(); got != 1 {
+	if got := fetcher.Calls(); got != 1 {
 		t.Fatalf("expected exactly one synchronous bootstrap fetch, got %d", got)
 	}
 	if !verStore.closed.Load() {
@@ -843,11 +884,12 @@ func TestAgentRunWithChild(t *testing.T) {
 	a.configFile = filepath.Join(dir, "config.json")
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
 
-	time.Sleep(200 * time.Millisecond)
+	waitForTestFetcherCalls(t, a.pollClient.(*fakeFetcher), 1)
 	cancel()
 
 	select {
@@ -1034,7 +1076,7 @@ func TestAgentWaitForChildProcessWaitError(t *testing.T) {
 
 	a.waitForChildProcess()
 
-	if len(lg.errors) == 0 {
+	if lg.ErrorCount() == 0 {
 		t.Fatal("expected wait error to be logged")
 	}
 }
@@ -1064,8 +1106,8 @@ func TestAgentStopChildProcessDeadProcess(t *testing.T) {
 	a.stopChildProcess()
 
 	// Both SIGTERM and Kill should have failed and been logged.
-	if len(lg.errors) < 2 {
-		t.Fatalf("expected at least 2 errors (SIGTERM + Kill), got %d: %v", len(lg.errors), lg.errors)
+	if lg.ErrorCount() < 2 {
+		t.Fatalf("expected at least 2 errors (SIGTERM + Kill), got %d: %v", lg.ErrorCount(), lg.Errors())
 	}
 }
 
@@ -1073,10 +1115,10 @@ func TestAgentRunWithFailingChildStart(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	a, _, _, _, lg := newTestAgent(AgentConfig{
-		ServiceName: "test",
+		ServiceName:  "test",
 		PollInterval: 1,
-		Command:     "__nonexistent_xyz__",
-		StopDelay:   10 * time.Millisecond,
+		Command:      "__nonexistent_xyz__",
+		StopDelay:    10 * time.Millisecond,
 	})
 	a.configFile = filepath.Join(dir, "config.json")
 
@@ -1092,7 +1134,7 @@ func TestAgentRunWithFailingChildStart(t *testing.T) {
 		t.Fatal("Run() did not return after child start failure")
 	}
 
-	if len(lg.errors) == 0 {
+	if lg.ErrorCount() == 0 {
 		t.Fatal("expected child start failure to be logged")
 	}
 }
@@ -1266,6 +1308,21 @@ func TestAgentRunCancellationAfterChildLaunch(t *testing.T) {
 	}
 }
 
+func waitForTestFetcherCalls(t *testing.T, fetcher *fakeFetcher, want int32) {
+	t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for fetcher.Calls() < want {
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatalf("fetcher did not reach %d calls (got %d)", want, fetcher.Calls())
+		}
+	}
+}
+
 func waitForTestFile(path string, timeout time.Duration) error {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
@@ -1295,8 +1352,8 @@ func TestAgentRunSignal(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- a.Run(context.Background()) }()
 
-	time.Sleep(50 * time.Millisecond)
-	// Run() registered signal.Notify before we get here; SIGTERM goes to sigCh.
+	waitForTestFetcherCalls(t, a.pollClient.(*fakeFetcher), 1)
+	// Run() registered signal.Notify before bootstrap; SIGTERM goes to sigCh.
 	syscallKill(os.Getpid(), syscall.SIGTERM)
 
 	select {

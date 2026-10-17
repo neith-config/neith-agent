@@ -67,14 +67,16 @@ var runRunner = runner.Run
 var osExit = os.Exit
 var osOpenFile = os.OpenFile
 var agentNewVersionStore = agent.NewVersionStore
-var runUnifiedModeFn = runUnifiedMode
-var agentRunFn = func(a *agent.Agent) error { return a.Run(context.Background()) }
 
 func main() {
 	osExit(run(os.Args[1:], os.Stderr))
 }
 
 func run(args []string, stderr io.Writer) int {
+	return runWithUnifiedMode(args, stderr, runUnifiedMode)
+}
+
+func runWithUnifiedMode(args []string, stderr io.Writer, runMode func(cli.Options, string, string, string, logger.Logger, agent.SnapshotFetcher, agent.SSESubscriber, agent.VersionStore) int) int {
 	opts, err := cli.ParseCommand(args)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err.Error())
@@ -133,7 +135,7 @@ func run(args []string, stderr io.Writer) int {
 	pollClient := config.NewHubHTTPClient(hubURL, token, newPollingHTTPClient())
 	sseClient := config.NewHubSSEClient(hubURL, token, newStreamingHTTPClient(), lg, config.DefaultSleep, rand.Float64)
 
-	return runUnifiedModeFn(opts, hubURL, token, serviceName, lg, pollClient, sseClient, verStore)
+	return runMode(opts, hubURL, token, serviceName, lg, pollClient, sseClient, verStore)
 }
 
 func runUnifiedMode(
@@ -143,6 +145,19 @@ func runUnifiedMode(
 	pollClient agent.SnapshotFetcher,
 	sseClient agent.SSESubscriber,
 	verStore agent.VersionStore,
+) int {
+	return runUnifiedModeWithRunner(opts, hubURL, token, serviceName, lg, pollClient, sseClient, verStore,
+		func(a *agent.Agent, ctx context.Context) error { return a.Run(ctx) })
+}
+
+func runUnifiedModeWithRunner(
+	opts cli.Options,
+	hubURL, token, serviceName string,
+	lg logger.Logger,
+	pollClient agent.SnapshotFetcher,
+	sseClient agent.SSESubscriber,
+	verStore agent.VersionStore,
+	runAgent func(*agent.Agent, context.Context) error,
 ) int {
 	agentCfg := agent.AgentConfig{
 		HubURL:         hubURL,
@@ -159,7 +174,7 @@ func runUnifiedMode(
 
 	agnt := agent.NewAgent(agentCfg, pollClient, sseClient, verStore, lg)
 
-	if err := agentRunFn(agnt); err != nil {
+	if err := runAgent(agnt, context.Background()); err != nil {
 		var childExit *agent.ChildExitError
 		if errors.As(err, &childExit) {
 			lg.Error("Child process exited", err)

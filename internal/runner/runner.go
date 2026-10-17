@@ -23,6 +23,9 @@ type RunConfig struct {
 	Verbose        bool
 }
 
+// runnerDependencies are the injectable seams used by Run. Keeping them on an
+// invocation (rather than in package globals) makes concurrent runners isolated.
+// Deprecated test-only compatibility seams. Production code uses per-call dependencies.
 var commandContext = exec.CommandContext
 var forwardSignalsFunc = forwardSignals
 var notifyProcessStartedFunc = notifyProcessStarted
@@ -32,7 +35,33 @@ var resolveEnvFilePath = defaultEnvFilePath
 var writeEnvFileFunc = writeEnvFile
 var validateEnvFilePath = ensureWritableEnvFile
 
+type runnerDependencies struct {
+	commandContext       func(context.Context, string, ...string) *exec.Cmd
+	forwardSignals       func(*exec.Cmd) func()
+	notifyProcessStarted func(*exec.Cmd)
+	startCmd             func(*exec.Cmd) error
+	waitCmd              func(*exec.Cmd) error
+	resolveEnvFilePath   func() (string, error)
+	writeEnvFile         func(string, map[string]string) error
+	validateEnvFilePath  func(string) error
+}
+
+func defaultRunnerDependencies() runnerDependencies {
+	return runnerDependencies{
+		commandContext: exec.CommandContext, forwardSignals: forwardSignals,
+		notifyProcessStarted: notifyProcessStarted,
+		startCmd:             func(cmd *exec.Cmd) error { return cmd.Start() },
+		waitCmd:              func(cmd *exec.Cmd) error { return cmd.Wait() },
+		resolveEnvFilePath:   defaultEnvFilePath, writeEnvFile: writeEnvFile,
+		validateEnvFilePath: ensureWritableEnvFile,
+	}
+}
+
 func Run(ctx context.Context, fetcher EnvFetcher, lg logger.Logger, cfg RunConfig) int {
+	return runWithDependencies(ctx, fetcher, lg, cfg, defaultRunnerDependencies())
+}
+
+func runWithDependencies(ctx context.Context, fetcher EnvFetcher, lg logger.Logger, cfg RunConfig, d runnerDependencies) int {
 	lg.Info("Fetching configuration")
 	env, err := fetcher.Fetch(ctx)
 	if err != nil {
@@ -46,31 +75,31 @@ func Run(ctx context.Context, fetcher EnvFetcher, lg logger.Logger, cfg RunConfi
 		path := cfg.JsonOutputPath
 		if path == "" {
 			var err error
-			path, err = resolveEnvFilePath()
+			path, err = d.resolveEnvFilePath()
 			if err != nil {
 				lg.Error("Failed to resolve env file path", err)
 				return 1
 			}
 		}
-		if err := validateEnvFilePath(path); err != nil {
+		if err := d.validateEnvFilePath(path); err != nil {
 			lg.Error("Invalid env file path", err)
 			return 1
 		}
-		if err := writeEnvFileFunc(path, env); err != nil {
+		if err := d.writeEnvFile(path, env); err != nil {
 			lg.Error("Failed to write env file", err)
 			return 1
 		}
 		lg.Info(fmt.Sprintf("Writing JSON output to %s", path))
 	}
 
-	cmd := commandContext(ctx, cfg.Command, cfg.Args...)
+	cmd := d.commandContext(ctx, cfg.Command, cfg.Args...)
 	if cfg.InjectEnv {
 		cmd.Env = MergeEnv(os.Environ(), env, lg)
 		lg.Debug("Environment variables injected")
 	}
 	configureCmdStdio(cmd)
 
-	cleanupSignals := forwardSignalsFunc(cmd)
+	cleanupSignals := d.forwardSignals(cmd)
 	defer cleanupSignals()
 
 	// Check if context was already cancelled or timed out before starting the command.
@@ -81,14 +110,14 @@ func Run(ctx context.Context, fetcher EnvFetcher, lg logger.Logger, cfg RunConfi
 	}
 
 	lg.Info(fmt.Sprintf("Starting process: %s", cfg.Command))
-	if err := startCmd(cmd); err != nil {
+	if err := d.startCmd(cmd); err != nil {
 		lg.Error("Failed to start process", err)
 		return exitCodeFromStartError(err)
 	}
 
-	notifyProcessStartedFunc(cmd)
+	d.notifyProcessStarted(cmd)
 
-	if err := waitCmd(cmd); err != nil {
+	if err := d.waitCmd(cmd); err != nil {
 		return exitCodeFromWaitError(err)
 	}
 

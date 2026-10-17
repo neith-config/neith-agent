@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -11,9 +12,10 @@ import (
 
 // watcherFetcher is a test fetcher whose response can be changed between calls.
 type watcherFetcher struct {
-	mu     atomic.Value // stores map[string]string
-	err    error
-	calls  atomic.Int32
+	mu    atomic.Value // stores map[string]string
+	errMu sync.RWMutex
+	err   error
+	calls atomic.Int32
 }
 
 func newWatcherFetcher(cfg map[string]string) *watcherFetcher {
@@ -26,6 +28,8 @@ func (f *watcherFetcher) setConfig(cfg map[string]string) { f.mu.Store(cfg) }
 
 func (f *watcherFetcher) Fetch(_ context.Context) (map[string]string, error) {
 	f.calls.Add(1)
+	f.errMu.RLock()
+	defer f.errMu.RUnlock()
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -66,7 +70,9 @@ func TestConfigWatcherStartStop(t *testing.T) {
 	cw.Start(context.Background())
 	cw.Start(context.Background()) // second Start is a no-op
 
-	time.Sleep(20 * time.Millisecond)
+	for fetcher.calls.Load() < 1 {
+		time.Sleep(time.Millisecond)
+	}
 	cw.Stop()
 	cw.Stop() // second Stop is a no-op
 }
@@ -77,13 +83,18 @@ func TestConfigWatcherDetectsChange(t *testing.T) {
 	cw := NewConfigWatcher(fetcher, &testLogger{}, 30*time.Millisecond)
 
 	var changeCount atomic.Int32
-	cw.AddCallback(func(_ map[string]string) { changeCount.Add(1) })
+	initialReady := make(chan struct{})
+	var initialOnce sync.Once
+	cw.AddCallback(func(_ map[string]string) {
+		changeCount.Add(1)
+		initialOnce.Do(func() { close(initialReady) })
+	})
 
 	cw.Start(context.Background())
 	defer cw.Stop()
+	<-initialReady
 
-	// Let the initial fetch run and stabilise.
-	time.Sleep(20 * time.Millisecond)
+	// Mutate only after the initial fetch callback has completed.
 	initial := changeCount.Load()
 
 	// Mutate config so the hash changes.
@@ -108,11 +119,17 @@ func TestConfigWatcherFetchError(t *testing.T) {
 
 	// Let first checkConfig run (no error yet).
 	cw.Start(context.Background())
-	time.Sleep(10 * time.Millisecond)
+	for fetcher.calls.Load() < 1 {
+		time.Sleep(time.Millisecond)
+	}
 
 	// Inject error.
+	fetcher.errMu.Lock()
 	fetcher.err = errTest
-	time.Sleep(50 * time.Millisecond)
+	fetcher.errMu.Unlock()
+	for fetcher.calls.Load() < 2 {
+		time.Sleep(time.Millisecond)
+	}
 	cw.Stop()
 
 	if len(lg.errors) == 0 {
@@ -159,24 +176,6 @@ func TestProcessRestarterStartStop(t *testing.T) {
 		t.Skip("uses unix-style echo command")
 	}
 
-	oldCommandContext := commandContext
-	oldForward := forwardSignalsFunc
-	oldStart := startCmd
-	oldWait := waitCmd
-	defer func() {
-		commandContext = oldCommandContext
-		forwardSignalsFunc = oldForward
-		startCmd = oldStart
-		waitCmd = oldWait
-	}()
-
-	commandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, name, args...)
-	}
-	forwardSignalsFunc = func(*exec.Cmd) func() { return func() {} }
-	startCmd = func(c *exec.Cmd) error { return c.Start() }
-	waitCmd = func(c *exec.Cmd) error { return c.Wait() }
-
 	fetcher := newWatcherFetcher(map[string]string{})
 	cw := NewConfigWatcher(fetcher, &testLogger{}, 100*time.Millisecond)
 	pr := NewProcessRestarter(cw, &testLogger{}, "echo", []string{"hi"}, RunConfig{
@@ -199,24 +198,6 @@ func TestProcessRestarterStartAlreadyRunning(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses unix-style echo command")
 	}
-
-	oldCommandContext := commandContext
-	oldForward := forwardSignalsFunc
-	oldStart := startCmd
-	oldWait := waitCmd
-	defer func() {
-		commandContext = oldCommandContext
-		forwardSignalsFunc = oldForward
-		startCmd = oldStart
-		waitCmd = oldWait
-	}()
-
-	commandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, name, args...)
-	}
-	forwardSignalsFunc = func(*exec.Cmd) func() { return func() {} }
-	startCmd = func(c *exec.Cmd) error { return c.Start() }
-	waitCmd = func(c *exec.Cmd) error { return c.Wait() }
 
 	fetcher := newWatcherFetcher(map[string]string{})
 	cw := NewConfigWatcher(fetcher, &testLogger{}, time.Second)
@@ -263,24 +244,6 @@ func TestProcessRestarterOnConfigChange(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses unix-style echo command")
 	}
-
-	oldCommandContext := commandContext
-	oldForward := forwardSignalsFunc
-	oldStart := startCmd
-	oldWait := waitCmd
-	defer func() {
-		commandContext = oldCommandContext
-		forwardSignalsFunc = oldForward
-		startCmd = oldStart
-		waitCmd = oldWait
-	}()
-
-	commandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		return exec.CommandContext(ctx, name, args...)
-	}
-	forwardSignalsFunc = func(*exec.Cmd) func() { return func() {} }
-	startCmd = func(c *exec.Cmd) error { return c.Start() }
-	waitCmd = func(c *exec.Cmd) error { return c.Wait() }
 
 	fetcher := newWatcherFetcher(map[string]string{"A": "1"})
 	cw := NewConfigWatcher(fetcher, &testLogger{}, 100*time.Millisecond)

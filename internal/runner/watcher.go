@@ -13,15 +13,17 @@ import (
 
 // ConfigWatcher monitors configuration changes and triggers callbacks
 type ConfigWatcher struct {
-	fetcher   EnvFetcher
-	logger    logger.Logger
-	interval  time.Duration
-	lastHash  atomic.Uint64
-	callbacks []func(map[string]string)
-	ctx       context.Context
-	cancel    context.CancelFunc
-	running   atomic.Bool
-	mu        sync.RWMutex
+	fetcher    EnvFetcher
+	logger     logger.Logger
+	interval   time.Duration
+	lastHash   atomic.Uint64
+	callbacks  []func(map[string]string)
+	ctx        context.Context
+	cancel     context.CancelFunc
+	running    atomic.Bool
+	mu         sync.RWMutex
+	loopDone   chan struct{}
+	callbackWG sync.WaitGroup
 }
 
 // NewConfigWatcher creates a new configuration watcher
@@ -49,6 +51,7 @@ func (cw *ConfigWatcher) Start(ctx context.Context) {
 	}
 
 	cw.ctx, cw.cancel = context.WithCancel(ctx)
+	cw.loopDone = make(chan struct{})
 	go cw.watchLoop()
 }
 
@@ -59,10 +62,13 @@ func (cw *ConfigWatcher) Stop() {
 	}
 
 	cw.cancel()
+	<-cw.loopDone
+	cw.callbackWG.Wait()
 }
 
 // watchLoop runs the main watching loop
 func (cw *ConfigWatcher) watchLoop() {
+	defer close(cw.loopDone)
 	ticker := time.NewTicker(cw.interval)
 	defer ticker.Stop()
 
@@ -107,7 +113,11 @@ func (cw *ConfigWatcher) checkConfig() {
 
 	// Call all callbacks
 	for _, callback := range callbacks {
-		go callback(config)
+		cw.callbackWG.Add(1)
+		go func(callback func(map[string]string)) {
+			defer cw.callbackWG.Done()
+			callback(config)
+		}(callback)
 	}
 }
 
@@ -136,7 +146,6 @@ type ProcessRestarter struct {
 	process   *os.Process
 	processMu sync.Mutex
 	running   atomic.Bool
-	stopCh    chan struct{}
 }
 
 // NewProcessRestarter creates a new process restarter
@@ -147,7 +156,6 @@ func NewProcessRestarter(watcher *ConfigWatcher, lg logger.Logger, cmd string, a
 		cmd:       cmd,
 		args:      args,
 		runConfig: cfg,
-		stopCh:    make(chan struct{}),
 	}
 }
 
@@ -168,12 +176,6 @@ func (pr *ProcessRestarter) Start(ctx context.Context, initialFetcher EnvFetcher
 	// Start watcher
 	pr.watcher.Start(ctx)
 
-	// Wait for stop signal
-	go func() {
-		<-pr.stopCh
-		pr.cleanup()
-	}()
-
 	return nil
 }
 
@@ -183,7 +185,6 @@ func (pr *ProcessRestarter) Stop() {
 		return // Not running
 	}
 
-	close(pr.stopCh)
 	pr.watcher.Stop()
 	pr.stopProcess()
 }

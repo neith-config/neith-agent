@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,14 +34,25 @@ func (f *fakeFetcher) FetchSnapshot(_ context.Context) (agent.Snapshot, error) {
 }
 
 // fakeSSE implements agent.SSESubscriber for tests.
-type fakeSSE struct{}
+type fakeSSE struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (f *fakeSSE) signalStarted() {
+	if f.started != nil {
+		f.once.Do(func() { close(f.started) })
+	}
+}
 
 func (f *fakeSSE) Stream(ctx context.Context, _ func(map[string]string)) error {
+	f.signalStarted()
 	<-ctx.Done()
 	return ctx.Err()
 }
 
 func (f *fakeSSE) StreamSnapshots(ctx context.Context, _ func(agent.Snapshot)) error {
+	f.signalStarted()
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -220,16 +232,14 @@ func TestRun(t *testing.T) {
 		}
 	})
 
-	t.Run("successful setup reaches runUnifiedModeFn", func(t *testing.T) {
+	t.Run("successful setup reaches injected run mode", func(t *testing.T) {
 		oldOpen := osOpenFile
 		defer func() { osOpenFile = oldOpen }()
 		osOpenFile = func(_ string, _ int, _ os.FileMode) (*os.File, error) {
 			return os.CreateTemp(t.TempDir(), "v")
 		}
 
-		oldFn := runUnifiedModeFn
-		defer func() { runUnifiedModeFn = oldFn }()
-		runUnifiedModeFn = func(_ cli.Options, _, _, _ string, _ logger.Logger, _ agent.SnapshotFetcher, _ agent.SSESubscriber, _ agent.VersionStore) int {
+		runMode := func(_ cli.Options, _, _, _ string, _ logger.Logger, _ agent.SnapshotFetcher, _ agent.SSESubscriber, _ agent.VersionStore) int {
 			return 0
 		}
 
@@ -237,7 +247,7 @@ func TestRun(t *testing.T) {
 		t.Setenv("NEITH_TOKEN", "tok")
 
 		var stderr bytes.Buffer
-		code := run([]string{"--", "echo", "hi"}, &stderr)
+		code := runWithUnifiedMode([]string{"--", "echo", "hi"}, &stderr, runMode)
 		if code != 0 {
 			t.Fatalf("expected 0, got %d", code)
 		}
@@ -332,11 +342,6 @@ func TestGetEnvOrDefault(t *testing.T) {
 }
 
 func TestRunUnifiedModeHonorsJSONOutputFlags(t *testing.T) {
-	oldFn := agentRunFn
-	defer func() { agentRunFn = oldFn }()
-
-	agentRunFn = func(a *agent.Agent) error { return a.Run(context.Background()) }
-
 	t.Run("no-json-output suppresses secondary file", func(t *testing.T) {
 		xdgConfigHome := t.TempDir()
 		t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
@@ -392,40 +397,50 @@ func TestRunUnifiedMode(t *testing.T) {
 			PollInterval: 5,
 		}
 
+		sse := &fakeSSE{started: make(chan struct{})}
 		done := make(chan int, 1)
 		go func() {
-			code := runUnifiedMode(opts, "http://hub", "tok", "svc",
+			code := runUnifiedModeWithRunner(opts, "http://hub", "tok", "svc",
 				logger.NewLogger(false),
 				&fakeFetcher{config: map[string]string{}},
-				&fakeSSE{},
+				sse,
 				&fakeVersionStore{},
+				func(a *agent.Agent, parent context.Context) error {
+					ctx, cancel := context.WithCancel(parent)
+					defer cancel()
+					cancelDone := make(chan struct{})
+					go func() {
+						defer close(cancelDone)
+						<-sse.started
+						cancel()
+					}()
+					err := a.Run(ctx)
+					<-cancelDone
+					return err
+				},
 			)
 			done <- code
 		}()
-
-		time.Sleep(50 * time.Millisecond)
 
 		select {
 		case code := <-done:
 			if code != 0 {
 				t.Fatalf("expected exit 0, got %d", code)
 			}
-		case <-time.After(500 * time.Millisecond):
-			// expected: daemon is running
+		case <-time.After(2 * time.Second):
+			t.Fatal("daemon did not stop after cancellation")
 		}
 	})
 
 	t.Run("agent run error returns 1", func(t *testing.T) {
-		oldFn := agentRunFn
-		defer func() { agentRunFn = oldFn }()
-		agentRunFn = func(_ *agent.Agent) error { return errors.New("run error") }
+		runAgent := func(_ *agent.Agent, _ context.Context) error { return errors.New("run error") }
 
 		opts := cli.Options{PollInterval: 5}
-		code := runUnifiedMode(opts, "http://hub", "tok", "svc",
+		code := runUnifiedModeWithRunner(opts, "http://hub", "tok", "svc",
 			logger.NewLogger(false),
 			&fakeFetcher{config: map[string]string{}},
 			&fakeSSE{},
-			&fakeVersionStore{},
+			&fakeVersionStore{}, runAgent,
 		)
 		if code != 1 {
 			t.Fatalf("expected 1, got %d", code)
@@ -433,16 +448,14 @@ func TestRunUnifiedMode(t *testing.T) {
 	})
 
 	t.Run("child exit status is returned", func(t *testing.T) {
-		oldFn := agentRunFn
-		defer func() { agentRunFn = oldFn }()
-		agentRunFn = func(_ *agent.Agent) error { return &agent.ChildExitError{Code: 42} }
+		runAgent := func(_ *agent.Agent, _ context.Context) error { return &agent.ChildExitError{Code: 42} }
 
 		opts := cli.Options{PollInterval: 5}
-		code := runUnifiedMode(opts, "http://hub", "tok", "svc",
+		code := runUnifiedModeWithRunner(opts, "http://hub", "tok", "svc",
 			logger.NewLogger(false),
 			&fakeFetcher{config: map[string]string{}},
 			&fakeSSE{},
-			&fakeVersionStore{},
+			&fakeVersionStore{}, runAgent,
 		)
 		if code != 42 {
 			t.Fatalf("expected 42, got %d", code)
@@ -450,16 +463,14 @@ func TestRunUnifiedMode(t *testing.T) {
 	})
 
 	t.Run("agent run success returns 0", func(t *testing.T) {
-		oldFn := agentRunFn
-		defer func() { agentRunFn = oldFn }()
-		agentRunFn = func(_ *agent.Agent) error { return nil }
+		runAgent := func(_ *agent.Agent, _ context.Context) error { return nil }
 
 		opts := cli.Options{PollInterval: 5}
-		code := runUnifiedMode(opts, "http://hub", "tok", "svc",
+		code := runUnifiedModeWithRunner(opts, "http://hub", "tok", "svc",
 			logger.NewLogger(false),
 			&fakeFetcher{config: map[string]string{}},
 			&fakeSSE{},
-			&fakeVersionStore{},
+			&fakeVersionStore{}, runAgent,
 		)
 		if code != 0 {
 			t.Fatalf("expected 0, got %d", code)

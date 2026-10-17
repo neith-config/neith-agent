@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/neith-config/neith-agent/internal/logger"
 )
 
 type stubFetcher struct {
@@ -17,10 +19,19 @@ type stubFetcher struct {
 
 type noOpLogger struct{}
 
-func (l *noOpLogger) Debug(msg string)              {}
-func (l *noOpLogger) Info(msg string)               {}
-func (l *noOpLogger) Warning(msg string)            {}
-func (l *noOpLogger) Error(msg string, err error)   {}
+func runTest(ctx context.Context, fetcher EnvFetcher, lg logger.Logger, cfg RunConfig) int {
+	return runWithDependencies(ctx, fetcher, lg, cfg, runnerDependencies{
+		commandContext: commandContext, forwardSignals: forwardSignalsFunc,
+		notifyProcessStarted: notifyProcessStartedFunc, startCmd: startCmd, waitCmd: waitCmd,
+		resolveEnvFilePath: resolveEnvFilePath, writeEnvFile: writeEnvFileFunc,
+		validateEnvFilePath: validateEnvFilePath,
+	})
+}
+
+func (l *noOpLogger) Debug(msg string)            {}
+func (l *noOpLogger) Info(msg string)             {}
+func (l *noOpLogger) Warning(msg string)          {}
+func (l *noOpLogger) Error(msg string, err error) {}
 
 func TestRun_ResolveEnvFilePathError(t *testing.T) {
 	oldResolve := resolveEnvFilePath
@@ -45,7 +56,7 @@ func TestRun_ResolveEnvFilePathError(t *testing.T) {
 		return nil
 	}
 
-	code := Run(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
+	code := runTest(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
 		Command:      "ignored",
 		WriteEnvFile: true,
 	})
@@ -81,7 +92,7 @@ func TestRun_WritesEnvFile(t *testing.T) {
 		return nil
 	}
 
-	code := Run(context.Background(), stubFetcher{env: map[string]string{"A": "1"}}, &noOpLogger{}, RunConfig{
+	code := runTest(context.Background(), stubFetcher{env: map[string]string{"A": "1"}}, &noOpLogger{}, RunConfig{
 		Command:        "ignored",
 		WriteEnvFile:   true,
 		JsonOutputPath: "/tmp/example.json",
@@ -110,7 +121,7 @@ func TestRun_ValidateEnvFilePathError(t *testing.T) {
 	}
 	validateEnvFilePath = func(string) error { return errors.New("denied") }
 
-	code := Run(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
+	code := runTest(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
 		Command:      "ignored",
 		WriteEnvFile: true,
 	})
@@ -126,7 +137,7 @@ func TestRun_WriteEnvFileDefaultPathError(t *testing.T) {
 		return "", errors.New("boom")
 	}
 
-	code := Run(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
+	code := runTest(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
 		Command:      "ignored",
 		WriteEnvFile: true,
 	})
@@ -153,7 +164,7 @@ func TestRun_WriteEnvFileWriteError(t *testing.T) {
 		return errors.New("boom")
 	}
 
-	code := Run(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
+	code := runTest(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
 		Command:      "ignored",
 		WriteEnvFile: true,
 	})
@@ -186,7 +197,7 @@ func TestRun_ConfiguresStdioBeforeStart(t *testing.T) {
 		return errors.New("boom")
 	}
 
-	code := Run(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{Command: "ignored"})
+	code := runTest(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{Command: "ignored"})
 	if code != 1 {
 		t.Fatalf("expected 1, got %d", code)
 	}
@@ -226,7 +237,7 @@ func TestRun_FetchError(t *testing.T) {
 	}
 	forwardSignalsFunc = func(*exec.Cmd) func() { return func() {} }
 
-	code := Run(context.Background(), stubFetcher{err: errors.New("x")}, &noOpLogger{}, RunConfig{Command: "ignored"})
+	code := runTest(context.Background(), stubFetcher{err: errors.New("x")}, &noOpLogger{}, RunConfig{Command: "ignored"})
 	if code != 1 {
 		t.Fatalf("expected 1, got %d", code)
 	}
@@ -241,7 +252,7 @@ func TestRun_StartNotFound(t *testing.T) {
 		return func() { cleanupCalled = true }
 	}
 
-	code := Run(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{Command: "__definitely_not_a_real_command__"})
+	code := runTest(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{Command: "__definitely_not_a_real_command__"})
 	if code != 127 {
 		t.Fatalf("expected 127, got %d", code)
 	}
@@ -254,7 +265,7 @@ func TestRun_ExitCodePropagation(t *testing.T) {
 	t.Parallel()
 
 	cmd, args := nonZeroExitCommand(7)
-	code := Run(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{Command: cmd, Args: args})
+	code := runTest(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{Command: cmd, Args: args})
 	if code != 7 {
 		t.Fatalf("expected 7, got %d", code)
 	}
@@ -264,7 +275,7 @@ func TestRun_Success(t *testing.T) {
 	t.Parallel()
 
 	cmd, args := zeroExitCommand()
-	code := Run(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{Command: cmd, Args: args})
+	code := runTest(context.Background(), stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{Command: cmd, Args: args})
 	if code != 0 {
 		t.Fatalf("expected 0, got %d", code)
 	}
@@ -302,7 +313,7 @@ func TestRun_InjectsEnv(t *testing.T) {
 	}
 	waitCmd = func(*exec.Cmd) error { return nil }
 
-	code := Run(context.Background(), stubFetcher{env: map[string]string{"FOO": "BAR"}}, &noOpLogger{}, RunConfig{
+	code := runTest(context.Background(), stubFetcher{env: map[string]string{"FOO": "BAR"}}, &noOpLogger{}, RunConfig{
 		Command:   "ignored",
 		InjectEnv: true,
 	})
@@ -339,7 +350,7 @@ func TestRun_ContextTimeoutBeforeCommandStart(t *testing.T) {
 	defer cancel()
 	time.Sleep(2 * time.Millisecond) // Ensure timeout has occurred
 
-	code := Run(ctx, stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
+	code := runTest(ctx, stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
 		Command: "ignored",
 	})
 
@@ -378,7 +389,7 @@ func TestRun_ContextStillValidBeforeCommandStart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	code := Run(ctx, stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
+	code := runTest(ctx, stubFetcher{env: map[string]string{}}, &noOpLogger{}, RunConfig{
 		Command: "ignored",
 	})
 
