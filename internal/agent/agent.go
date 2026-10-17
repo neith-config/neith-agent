@@ -68,9 +68,11 @@ type Agent struct {
 
 	childCmd     string
 	childArgs    []string
-	childProcess *os.Process
-	childMu      sync.Mutex
-	childDone    chan struct{}
+	childProcess     *os.Process
+	childMu          sync.Mutex
+	childDone        chan struct{}
+	childWaitStarted bool
+	startProcess     func(*exec.Cmd) error
 }
 
 type AgentConfig struct {
@@ -114,6 +116,7 @@ func NewAgent(cfg AgentConfig, pollClient runner.EnvFetcher, sseClient SSESubscr
 		childCmd:      cfg.Command,
 		childArgs:     cfg.Args,
 		childDone:     make(chan struct{}),
+		startProcess:  func(cmd *exec.Cmd) error { return cmd.Start() },
 		osRename:      os.Rename,
 		osRemove:      os.Remove,
 		jsonMarshalFn: json.Marshal,
@@ -142,9 +145,13 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	var childResult chan error
 	if a.childCmd != "" {
-		if err := a.startChildProcess(); err != nil {
+		if err := a.startChildProcessWithContext(ctx); err != nil {
 			a.logger.Error("Failed to start child process", err)
 			return err
 		}
@@ -179,11 +186,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		a.logger.Info("Context cancelled")
 	case runErr = <-childResult:
+		if ctx.Err() != nil {
+			runErr = nil
+		}
 	}
 
 	a.logger.Info("Shutting down...")
-	cancel()
 	a.stopChildProcess()
+	cancel()
 	wg.Wait()
 	a.logger.Info("Shutdown complete")
 
@@ -328,9 +338,16 @@ func (a *Agent) GetCurrentVersion() int64 {
 }
 
 func (a *Agent) startChildProcess() error {
+	return a.startChildProcessWithContext(context.Background())
+}
+
+func (a *Agent) startChildProcessWithContext(ctx context.Context) error {
 	a.childMu.Lock()
 	defer a.childMu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if a.childProcess != nil {
 		return fmt.Errorf("child process already running")
 	}
@@ -351,12 +368,16 @@ func (a *Agent) startChildProcess() error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Start(); err != nil {
+	if err := a.startProcess(cmd); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to start child command: %w", err)
 	}
 
 	a.childProcess = cmd.Process
 	a.childDone = make(chan struct{})
+	a.childWaitStarted = false
 	a.logger.Info(fmt.Sprintf("Started child process %d: %s", a.childProcess.Pid, a.childCmd))
 
 	return nil
@@ -364,12 +385,13 @@ func (a *Agent) startChildProcess() error {
 
 func (a *Agent) waitForChildProcess() error {
 	a.childMu.Lock()
-	process := a.childProcess
-	a.childMu.Unlock()
-
-	if process == nil {
+	if a.childProcess == nil || a.childWaitStarted {
+		a.childMu.Unlock()
 		return nil
 	}
+	a.childWaitStarted = true
+	process := a.childProcess
+	a.childMu.Unlock()
 
 	state, err := process.Wait()
 
@@ -402,12 +424,19 @@ func (a *Agent) stopChildProcess() {
 		a.childMu.Unlock()
 		return
 	}
-	a.logger.Info(fmt.Sprintf("Stopping child process %d", a.childProcess.Pid))
-	if err := signalChildProcess(a.childProcess, syscall.SIGTERM); err != nil {
+	process := a.childProcess
+	childDone := a.childDone
+	waitStarted := a.childWaitStarted
+	a.logger.Info(fmt.Sprintf("Stopping child process %d", process.Pid))
+	a.childMu.Unlock()
+
+	if !waitStarted {
+		go func() { _ = a.waitForChildProcess() }()
+	}
+
+	if err := signalChildProcess(process, syscall.SIGTERM); err != nil {
 		a.logger.Error("Failed to send SIGTERM to child process group", err)
 	}
-	childDone := a.childDone
-	a.childMu.Unlock()
 
 	timer := time.NewTimer(a.config.StopDelay)
 	defer timer.Stop()
@@ -420,12 +449,13 @@ func (a *Agent) stopChildProcess() {
 	}
 
 	a.childMu.Lock()
-	defer a.childMu.Unlock()
-	if a.childProcess != nil {
-		a.logger.Warning(fmt.Sprintf("Child process %d did not exit within %v, sending SIGKILL", a.childProcess.Pid, a.config.StopDelay))
-		if err := killChildProcess(a.childProcess); err != nil {
+	process = a.childProcess
+	a.childMu.Unlock()
+	if process != nil {
+		a.logger.Warning(fmt.Sprintf("Child process %d did not exit within %v, sending SIGKILL", process.Pid, a.config.StopDelay))
+		if err := killChildProcess(process); err != nil {
 			a.logger.Error("Failed to kill child process group", err)
 		}
-		a.childProcess = nil
 	}
+	<-childDone
 }

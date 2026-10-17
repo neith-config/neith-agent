@@ -42,6 +42,16 @@ func (f *fakeFetcher) Fetch(_ context.Context) (map[string]string, error) {
 	return f.config, f.err
 }
 
+type cancelingFetcher struct {
+	config map[string]string
+	cancel context.CancelFunc
+}
+
+func (f *cancelingFetcher) Fetch(_ context.Context) (map[string]string, error) {
+	f.cancel()
+	return f.config, nil
+}
+
 // fakeSSESubscriber calls onConfig once with the configured map then blocks
 // until ctx is cancelled.
 type fakeSSESubscriber struct {
@@ -823,6 +833,160 @@ func TestAgentRunPropagatesChildExit(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run() did not return after child exit")
+	}
+}
+
+func TestAgentRunCancellationBeforeChildLaunch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("child process test uses unix commands")
+	}
+
+	marker := filepath.Join(t.TempDir(), "started")
+	a, _, _, _, _ := newTestAgent(AgentConfig{
+		ServiceName: "cancel-before-launch",
+		Command:     "sh",
+		Args:        []string{"-c", fmt.Sprintf("printf started > %s; sleep 60", marker)},
+	})
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := a.Run(ctx)
+	if err != context.Canceled {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("child launched after cancellation; marker stat error: %v", err)
+	}
+}
+
+func TestAgentRunCancellationBetweenBootstrapAndChildLaunch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("child process test uses unix commands")
+	}
+
+	marker := filepath.Join(t.TempDir(), "started")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a, _, _, _, _ := newTestAgent(AgentConfig{
+		ServiceName: "cancel-during-launch",
+		Command:     "sh",
+		Args:        []string{"-c", fmt.Sprintf("printf started > %s; sleep 60", marker)},
+	})
+	a.pollClient = &cancelingFetcher{config: map[string]string{"TEST": "value"}, cancel: cancel}
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+
+	err := a.Run(ctx)
+	if err != context.Canceled {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("child launched after bootstrap cancellation; marker stat error: %v", err)
+	}
+}
+
+func TestAgentRunCancellationDuringChildLaunch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("child process test uses unix commands")
+	}
+
+	marker := filepath.Join(t.TempDir(), "started")
+	a, _, _, _, _ := newTestAgent(AgentConfig{
+		ServiceName: "cancel-during-start",
+		Command:     "sh",
+		Args:        []string{"-c", fmt.Sprintf("printf started > %s; sleep 60", marker)},
+	})
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	a.startProcess = func(cmd *exec.Cmd) error {
+		close(entered)
+		<-release
+		return context.Canceled
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("child launch did not reach the controlled start point")
+	}
+	cancel()
+	close(release)
+
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run() did not stop after cancellation during child launch")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("child launched after cancellation during start; marker stat error: %v", err)
+	}
+}
+
+func TestAgentRunCancellationAfterChildLaunch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("child process test uses unix commands")
+	}
+
+	marker := filepath.Join(t.TempDir(), "started")
+	a, _, _, _, _ := newTestAgent(AgentConfig{
+		ServiceName: "cancel-after-launch",
+		Command:     "sh",
+		Args:        []string{"-c", fmt.Sprintf("printf started > %s; sleep 60", marker)},
+		StopDelay:   100 * time.Millisecond,
+	})
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- a.Run(ctx) }()
+
+	if err := waitForTestFile(marker, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() returned unexpected cancellation error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run() did not stop after cancellation")
+	}
+
+	a.childMu.Lock()
+	defer a.childMu.Unlock()
+	if a.childProcess != nil {
+		t.Fatalf("child process remained tracked after cancellation: %d", a.childProcess.Pid)
+	}
+}
+
+func waitForTestFile(path string, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			return fmt.Errorf("file %s was not created", path)
+		}
 	}
 }
 
