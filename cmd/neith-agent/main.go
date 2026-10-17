@@ -143,14 +143,16 @@ func runUnifiedMode(
 	verStore agent.VersionStore,
 ) int {
 	agentCfg := agent.AgentConfig{
-		HubURL:       hubURL,
-		Token:        token,
-		ServiceName:  serviceName,
-		PollInterval: opts.PollInterval,
-		Verbose:      opts.Verbose,
-		Command:      opts.Command,
-		Args:         opts.CommandArgs,
-		InjectEnv:    !opts.NoEnv,
+		HubURL:         hubURL,
+		Token:          token,
+		ServiceName:    serviceName,
+		PollInterval:   opts.PollInterval,
+		Verbose:        opts.Verbose,
+		Command:        opts.Command,
+		Args:           opts.CommandArgs,
+		InjectEnv:      !opts.NoEnv,
+		WriteJSONFile:  !opts.NoEnvFile,
+		JSONOutputPath: opts.JsonOutputPath,
 	}
 
 	agnt := agent.NewAgent(agentCfg, pollClient, sseClient, verStore, lg)

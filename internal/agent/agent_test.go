@@ -148,6 +148,55 @@ func TestNewAgentDefaults(t *testing.T) {
 	}
 }
 
+func TestAgentWritesConfiguredJSONOutput(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "nested", "config.json")
+	a, _, _, _, _ := newTestAgent(AgentConfig{
+		ServiceName:    "json-output",
+		WriteJSONFile:  true,
+		JSONOutputPath: jsonPath,
+	})
+	a.configFile = filepath.Join(dir, "internal.json")
+
+	a.applyConfig(map[string]string{"VISIBLE": "value"})
+
+	content, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read configured JSON output: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(content, &got); err != nil {
+		t.Fatalf("parse configured JSON output: %v", err)
+	}
+	if got["VISIBLE"] != "value" {
+		t.Fatalf("unexpected configured JSON output: %v", got)
+	}
+}
+
+func TestAgentNoJSONOutputStillPublishesCanonicalSnapshot(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "application.json")
+	a, _, _, _, _ := newTestAgent(AgentConfig{
+		ServiceName:    "no-json-output",
+		JSONOutputPath: jsonPath,
+		WriteJSONFile:  false,
+	})
+	a.configFile = filepath.Join(dir, "internal.json")
+
+	a.applyConfig(map[string]string{"INTERNAL": "value"})
+
+	if _, err := os.Stat(a.configFile); err != nil {
+		t.Fatalf("canonical snapshot was not published: %v", err)
+	}
+	if _, err := os.Stat(jsonPath); !os.IsNotExist(err) {
+		t.Fatalf("secondary JSON output should be suppressed, stat error: %v", err)
+	}
+}
+
 func TestAgentGetCurrentConfig(t *testing.T) {
 	t.Parallel()
 

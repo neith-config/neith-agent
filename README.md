@@ -34,7 +34,7 @@ To suppress configuration injection:
 ```sh
 neith-agent --no-env -- env                  # Skip environment injection
 neith-agent --no-json-output -- env             # Skip JSON file writing
-neith-agent --no-env --no-json-output -- env    # Skip both (just run the command)
+neith-agent --no-env --no-json-output -- env    # Skip child env injection and secondary JSON output
 ```
 
 To use a custom path for the JSON file:
@@ -45,7 +45,7 @@ neith-agent --json-output /custom/path/config.json -- env
 
 ## Configuration Delivery
 
-By default, neith-agent delivers fetched configuration in **two ways simultaneously**:
+By default, neith-agent delivers fetched configuration in **two application-facing ways simultaneously**. The daemon's canonical shared snapshot remains available separately for dynamic delivery, including when `--no-json-output` is used:
 
 ### 1. Environment Variable Injection
 
@@ -89,7 +89,7 @@ neith-agent [FLAGS] -- COMMAND [ARGS...]
 |------|-------------|---------|--------|
 | `--no-env` | Skip environment variable injection | false | Configuration is NOT merged into child environment |
 | `--no-json-output` | Skip JSON file creation | false | Configuration JSON file is NOT written |
-| `--json-output PATH` | Custom path for JSON config file | `$XDG_CONFIG_HOME/neith-agent/env.json` | Implies `--no-json-output` is **disabled** (file will be written) |
+| `--json-output PATH` | Custom path for secondary JSON config file | `$XDG_CONFIG_HOME/neith-agent/env.json` | Mutually exclusive with `--no-json-output` |
 
 ### Flag Ordering
 
@@ -103,11 +103,7 @@ neith-agent --json-output /tmp/cfg.json --no-env -- cmd
 
 ### Special Behavior
 
-- **`--json-output` with a value**: If you previously set `--no-json-output`, the `--json-output PATH` flag automatically enables file writing (overrides `--no-json-output`)
-  ```sh
-  # File WILL be written (--json-output enables it):
-  neith-agent --no-json-output --json-output /tmp/cfg.json -- cmd
-  ```
+- **`--json-output` and `--no-json-output`**: These flags are mutually exclusive. Supplying both is a command-line error; choose either the default path/custom secondary output or explicit suppression.
 
 - **Invalid flags**: Unknown flags cause immediate error with exit code `2`
   ```sh

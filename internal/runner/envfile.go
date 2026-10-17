@@ -10,12 +10,20 @@ var userConfigDir = os.UserConfigDir
 var mkdirAll = os.MkdirAll
 var openFile = os.OpenFile
 
+func DefaultEnvFilePath() (string, error) {
+	return defaultEnvFilePath()
+}
+
 func defaultEnvFilePath() (string, error) {
 	dir, err := userConfigDir()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, "neith-agent", "env.json"), nil
+}
+
+func WriteEnvFile(path string, env map[string]string) error {
+	return writeEnvFile(path, env)
 }
 
 func writeEnvFile(path string, env map[string]string) error {

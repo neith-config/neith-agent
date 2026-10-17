@@ -78,7 +78,7 @@ func applyFlag(opts *Options, flag string, args []string, idx *int) error {
 		if *idx+1 >= len(args) {
 			return ErrMissingFlagValue
 		}
-		if args[*idx+1] == "--" {
+		if args[*idx+1] == "--" || isFlag(args[*idx+1]) {
 			return ErrMissingFlagValue
 		}
 		*idx = *idx + 1

@@ -95,15 +95,17 @@ type Agent struct {
 }
 
 type AgentConfig struct {
-	HubURL       string
-	Token        string
-	ServiceName  string
-	PollInterval int
-	Verbose      bool
-	Command      string
-	Args         []string
-	InjectEnv    bool
-	StopDelay    time.Duration // graceful child shutdown wait; defaults to DefaultStopDelay
+	HubURL         string
+	Token          string
+	ServiceName    string
+	PollInterval   int
+	Verbose        bool
+	Command        string
+	Args           []string
+	InjectEnv      bool
+	WriteJSONFile  bool
+	JSONOutputPath string
+	StopDelay      time.Duration // graceful child shutdown wait; defaults to DefaultStopDelay
 }
 
 // NewAgent creates an Agent. All dependencies are passed in; the constructor
@@ -302,6 +304,9 @@ func (a *Agent) applySnapshot(snapshot Snapshot, force bool) error {
 		return nil
 	}
 
+	if err := a.writeJSONOutput(snapshot.Config); err != nil {
+		return err
+	}
 	if err := a.writeConfigAtomically(snapshot.Config); err != nil {
 		return err
 	}
@@ -324,6 +329,9 @@ func (a *Agent) applyConfigResult(newConfig map[string]string, force bool) error
 		return nil
 	}
 
+	if err := a.writeJSONOutput(newConfig); err != nil {
+		return err
+	}
 	if err := a.writeConfigAtomically(newConfig); err != nil {
 		return err
 	}
@@ -363,6 +371,26 @@ func (a *Agent) configChanged(newConfig map[string]string) bool {
 		}
 	}
 	return false
+}
+
+func (a *Agent) writeJSONOutput(config map[string]string) error {
+	if !a.config.WriteJSONFile {
+		return nil
+	}
+
+	path := a.config.JSONOutputPath
+	if path == "" {
+		var err error
+		path, err = runner.DefaultEnvFilePath()
+		if err != nil {
+			return fmt.Errorf("resolve JSON output path: %w", err)
+		}
+	}
+	if err := runner.WriteEnvFile(path, config); err != nil {
+		return fmt.Errorf("write JSON output: %w", err)
+	}
+	a.logger.Info("Writing JSON output to " + path)
+	return nil
 }
 
 func (a *Agent) writeConfigAtomically(config map[string]string) error {

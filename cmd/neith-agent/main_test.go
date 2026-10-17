@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -336,9 +337,64 @@ func TestGetEnvOrDefault(t *testing.T) {
 	})
 }
 
+func TestRunUnifiedModeHonorsJSONOutputFlags(t *testing.T) {
+	oldFn := agentRunFn
+	defer func() { agentRunFn = oldFn }()
+
+	agentRunFn = func(a *agent.Agent) error { return a.Run(context.Background()) }
+
+	t.Run("no-json-output suppresses secondary file", func(t *testing.T) {
+		xdgConfigHome := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
+		serviceName := "-no-json"
+		code := runUnifiedMode(cli.Options{
+			NoEnvFile:    true,
+			PollInterval: 1,
+			Command:      "true",
+		}, "http://hub", "tok", serviceName,
+			logger.NewLogger(false),
+			&fakeFetcher{config: map[string]string{"KEY": "value"}},
+			&fakeSSE{},
+			&fakeVersionStore{},
+		)
+		if code != 0 {
+			t.Fatalf("expected 0, got %d", code)
+		}
+		defaultPath := filepath.Join(xdgConfigHome, "neith-agent", "env.json")
+		if _, err := os.Stat(defaultPath); !os.IsNotExist(err) {
+			t.Fatalf("secondary JSON output should be suppressed, stat error: %v", err)
+		}
+	})
+
+	t.Run("json-output writes custom secondary file", func(t *testing.T) {
+		jsonPath := filepath.Join(t.TempDir(), "nested", "custom.json")
+		code := runUnifiedMode(cli.Options{
+			JsonOutputPath: jsonPath,
+			PollInterval:   1,
+			Command:        "true",
+		}, "http://hub", "tok", "-custom-json",
+			logger.NewLogger(false),
+			&fakeFetcher{config: map[string]string{"KEY": "value"}},
+			&fakeSSE{},
+			&fakeVersionStore{},
+		)
+		if code != 0 {
+			t.Fatalf("expected 0, got %d", code)
+		}
+		content, err := os.ReadFile(jsonPath)
+		if err != nil {
+			t.Fatalf("read custom JSON output: %v", err)
+		}
+		if !strings.Contains(string(content), `"KEY"`) {
+			t.Fatalf("custom JSON output missing configuration: %q", content)
+		}
+	})
+}
+
 func TestRunUnifiedMode(t *testing.T) {
 	t.Run("daemon starts and runs", func(t *testing.T) {
 		opts := cli.Options{
+			NoEnvFile:   true,
 			PollInterval: 5,
 		}
 
