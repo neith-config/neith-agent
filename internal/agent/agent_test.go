@@ -34,9 +34,11 @@ func (tl *testLogger) Error(msg string, err error) { tl.errors = append(tl.error
 type fakeFetcher struct {
 	config map[string]string
 	err    error
+	calls  atomic.Int32
 }
 
 func (f *fakeFetcher) Fetch(_ context.Context) (map[string]string, error) {
+	f.calls.Add(1)
 	return f.config, f.err
 }
 
@@ -449,6 +451,34 @@ func TestAgentRun(t *testing.T) {
 
 	if !vs.closed.Load() {
 		t.Fatal("expected verStore.Close() to be called on shutdown")
+	}
+}
+
+func TestAgentRunRequiresInitialConfig(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &fakeFetcher{err: fmt.Errorf("bootstrap unavailable")}
+	verStore := &fakeVersionStore{}
+	a := NewAgent(
+		AgentConfig{ServiceName: "bootstrap-test", Command: "echo", Args: []string{"must-not-run"}},
+		fetcher,
+		&fakeSSESubscriber{},
+		verStore,
+		&testLogger{},
+	)
+	a.configFile = filepath.Join(t.TempDir(), "config.json")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := a.Run(ctx); err == nil {
+		t.Fatal("expected bootstrap failure before child or background workers start")
+	}
+	if got := fetcher.calls.Load(); got != 1 {
+		t.Fatalf("expected exactly one synchronous bootstrap fetch, got %d", got)
+	}
+	if !verStore.closed.Load() {
+		t.Fatal("expected version store to close after bootstrap failure")
 	}
 }
 

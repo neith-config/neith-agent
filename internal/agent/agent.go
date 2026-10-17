@@ -128,6 +128,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigCh)
 
+	if err := a.bootstrapConfig(ctx); err != nil {
+		a.logger.Error("Initial configuration bootstrap failed", err)
+		return err
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -200,27 +205,48 @@ func (a *Agent) runJitterPolling(ctx context.Context) {
 	}
 }
 
+// bootstrapConfig fetches and publishes the first valid snapshot before any
+// child or background transport is started.
+func (a *Agent) bootstrapConfig(ctx context.Context) error {
+	fetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	newConfig, err := a.pollClient.Fetch(fetchCtx)
+	if err != nil {
+		return fmt.Errorf("fetch initial configuration: %w", err)
+	}
+	if err := a.applyConfigResult(newConfig, true); err != nil {
+		return fmt.Errorf("publish initial configuration: %w", err)
+	}
+	return nil
+}
+
 // applyConfig applies a new config snapshot: detects changes, increments the
 // version counter, writes the config file atomically, and updates the mmap
 // version store. It is the shared write path for both SSE and jitter polling.
 func (a *Agent) applyConfig(newConfig map[string]string) {
+	if err := a.applyConfigResult(newConfig, false); err != nil {
+		a.logger.Error("Failed to apply configuration", err)
+	}
+}
+
+func (a *Agent) applyConfigResult(newConfig map[string]string, force bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if !a.configChanged(newConfig) {
-		return
+	if !force && !a.configChanged(newConfig) {
+		return nil
+	}
+
+	if err := a.writeConfigAtomically(newConfig); err != nil {
+		return err
 	}
 
 	a.snapshot = newConfig
-
-	if err := a.writeConfigAtomically(newConfig); err != nil {
-		a.logger.Error("Failed to write config file", err)
-		return
-	}
-
 	newVersion := a.version.Add(1)
 	a.writeVersionCounter(newVersion)
 	a.logger.Info(fmt.Sprintf("Config updated to version %d with %d variables", newVersion, len(newConfig)))
+	return nil
 }
 
 func (a *Agent) fetchAndUpdateConfig(ctx context.Context) {
