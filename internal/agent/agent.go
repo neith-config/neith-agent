@@ -345,6 +345,7 @@ func (a *Agent) startChildProcess() error {
 	}
 
 	cmd := exec.Command(a.childCmd, a.childArgs...)
+	configureChildProcess(cmd)
 	cmd.Env = env
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -402,8 +403,8 @@ func (a *Agent) stopChildProcess() {
 		return
 	}
 	a.logger.Info(fmt.Sprintf("Stopping child process %d", a.childProcess.Pid))
-	if err := a.childProcess.Signal(syscall.SIGTERM); err != nil {
-		a.logger.Error("Failed to send SIGTERM to child process", err)
+	if err := signalChildProcess(a.childProcess, syscall.SIGTERM); err != nil {
+		a.logger.Error("Failed to send SIGTERM to child process group", err)
 	}
 	childDone := a.childDone
 	a.childMu.Unlock()
@@ -422,8 +423,8 @@ func (a *Agent) stopChildProcess() {
 	defer a.childMu.Unlock()
 	if a.childProcess != nil {
 		a.logger.Warning(fmt.Sprintf("Child process %d did not exit within %v, sending SIGKILL", a.childProcess.Pid, a.config.StopDelay))
-		if err := a.childProcess.Kill(); err != nil {
-			a.logger.Error("Failed to kill child process", err)
+		if err := killChildProcess(a.childProcess); err != nil {
+			a.logger.Error("Failed to kill child process group", err)
 		}
 		a.childProcess = nil
 	}
