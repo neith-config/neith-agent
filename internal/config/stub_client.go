@@ -46,8 +46,8 @@ func (c *StubClient) run(ctx context.Context) {
 
 func (c *StubClient) buildSnapshot() map[string]string {
 	return map[string]string{
-		"NETH_STUB":    "true",
-		"NETH_VERSION": fmt.Sprintf("%d", c.version.Load()),
+		"NEITH_STUB":    "true",
+		"NEITH_VERSION": fmt.Sprintf("%d", c.version.Load()),
 	}
 }
 

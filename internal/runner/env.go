@@ -3,7 +3,7 @@ package runner
 import (
 	"strings"
 
-	"github.com/neth-config/neth-agent/internal/logger"
+	"github.com/neith-config/neith-agent/internal/logger"
 )
 
 // appendEnvVar appends or replaces an environment variable

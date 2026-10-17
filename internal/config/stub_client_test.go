@@ -14,11 +14,11 @@ func TestStubClientInitialFetch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got["NETH_STUB"] != "true" {
-		t.Errorf("NETH_STUB: want %q, got %q", "true", got["NETH_STUB"])
+	if got["NEITH_STUB"] != "true" {
+		t.Errorf("NEITH_STUB: want %q, got %q", "true", got["NEITH_STUB"])
 	}
-	if got["NETH_VERSION"] != "0" {
-		t.Errorf("NETH_VERSION: want %q, got %q", "0", got["NETH_VERSION"])
+	if got["NEITH_VERSION"] != "0" {
+		t.Errorf("NEITH_VERSION: want %q, got %q", "0", got["NEITH_VERSION"])
 	}
 }
 
@@ -59,7 +59,7 @@ func TestStubClientVersionIncrementsAfterInterval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	version := got["NETH_VERSION"]
+	version := got["NEITH_VERSION"]
 	if version == "0" {
 		t.Errorf("expected version > 0 after ticks, got %q", version)
 	}
@@ -70,10 +70,10 @@ func TestStubClientFetchReturnsCopy(t *testing.T) {
 
 	c := NewStubClient(context.Background())
 	first, _ := c.Fetch(context.Background())
-	first["NETH_STUB"] = "mutated"
+	first["NEITH_STUB"] = "mutated"
 
 	second, _ := c.Fetch(context.Background())
-	if second["NETH_STUB"] != "true" {
+	if second["NEITH_STUB"] != "true" {
 		t.Errorf("Fetch should return a copy; internal state was mutated")
 	}
 }

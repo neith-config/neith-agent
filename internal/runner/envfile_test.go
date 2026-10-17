@@ -21,7 +21,7 @@ func TestDefaultEnvFilePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	want := filepath.Join(tmp, "config", "neth-agent", "env.json")
+	want := filepath.Join(tmp, "config", "neith-agent", "env.json")
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}

@@ -97,12 +97,12 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           mkdir -p dist
-          out="dist/neth-agent-${GOOS}-${GOARCH}"
+          out="dist/neith-agent-${GOOS}-${GOARCH}"
           if [ "${GOOS}" = "windows" ]; then out="${out}.exe"; fi
-          go build -trimpath -ldflags "-s -w" -o "${out}" ./cmd/neth-agent
+          go build -trimpath -ldflags "-s -w" -o "${out}" ./cmd/neith-agent
       - uses: actions/upload-artifact@v4
         with:
-          name: neth-agent-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: neith-agent-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/
 
   mutesting:

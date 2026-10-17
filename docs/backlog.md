@@ -2,7 +2,7 @@
 
 ## Product identity
 
-- [ ] **NAME-001 — Unify the project name as Neith.** The intended name is the Egyptian goddess Neith (Russian: Нет); use `neith` as the target lowercase spelling. The approved target is organization `neith-config`, repository `neith-agent`, Go module `github.com/neith-config/neith-agent`, and binary `neith-agent`. The migration is deliberately breaking in the current tree and public configuration: no compatibility aliases or history rewrite. GitHub's old repository redirect is accepted. Implementation plan: [Neith rename and remediation plan](../.pi/plans/2026-10-15-neith-renaming-and-remediation/plan.md).
+- [x] **NAME-001 — Unify the project name as Neith.** The intended name is the Egyptian goddess Neith (Russian: Нет); use `neith` as the target lowercase spelling. The approved target is organization `neith-config`, repository `neith-agent`, Go module `github.com/neith-config/neith-agent`, and binary `neith-agent`. The migration is deliberately breaking in the current tree and public configuration: no compatibility aliases or history rewrite. GitHub's old repository redirect is accepted. Implementation plan: [Neith rename and remediation plan](../.pi/plans/2026-10-15-neith-renaming-and-remediation/plan.md). Local/public rename completed in unsigned commit `2418f8e` and verified through GitHub API; legacy redirect/history are retained by the approved boundary.
   - Requested: 2026-10-15.
   - Name reference: [World History Encyclopedia — Neith](https://www.worldhistory.org/Neith/).
 

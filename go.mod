@@ -1,4 +1,4 @@
-module github.com/neth-config/neth-agent
+module github.com/neith-config/neith-agent
 
 go 1.26
 

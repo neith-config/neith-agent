@@ -1,6 +1,6 @@
-# neth-agent
+# neith-agent
 
-`neth-agent` is a process launcher that fetches configuration from an external source and injects it into the target process environment. It bridges configuration management systems with arbitrary programs by transparently providing config values as environment variables and/or JSON files.
+`neith-agent` is a process launcher that fetches configuration from an external source and injects it into the target process environment. It bridges configuration management systems with arbitrary programs by transparently providing config values as environment variables and/or JSON files.
 
 ## Table of Contents
 
@@ -20,32 +20,32 @@
 The most basic usage launches a command with injected configuration:
 
 ```sh
-neth-agent -- env
+neith-agent -- env
 ```
 
 This will:
 1. Fetch configuration from the default configuration source
 2. Inject all config values as environment variables
-3. Write configuration to `~/.config/neth-agent/env.json` (or `$XDG_CONFIG_HOME/neth-agent/env.json`)
+3. Write configuration to `~/.config/neith-agent/env.json` (or `$XDG_CONFIG_HOME/neith-agent/env.json`)
 4. Execute the `env` command with the injected environment
 
 To suppress configuration injection:
 
 ```sh
-neth-agent --no-env -- env                  # Skip environment injection
-neth-agent --no-json-output -- env             # Skip JSON file writing
-neth-agent --no-env --no-json-output -- env    # Skip both (just run the command)
+neith-agent --no-env -- env                  # Skip environment injection
+neith-agent --no-json-output -- env             # Skip JSON file writing
+neith-agent --no-env --no-json-output -- env    # Skip both (just run the command)
 ```
 
 To use a custom path for the JSON file:
 
 ```sh
-neth-agent --json-output /custom/path/config.json -- env
+neith-agent --json-output /custom/path/config.json -- env
 ```
 
 ## Configuration Delivery
 
-By default, neth-agent delivers fetched configuration in **two ways simultaneously**:
+By default, neith-agent delivers fetched configuration in **two ways simultaneously**:
 
 ### 1. Environment Variable Injection
 
@@ -59,7 +59,7 @@ All configuration entries are merged into the child process's environment as `KE
 ### 2. JSON File Output
 
 Configuration is also written as a pretty-printed JSON file at:
-- **Default location**: `$XDG_CONFIG_HOME/neth-agent/env.json`
+- **Default location**: `$XDG_CONFIG_HOME/neith-agent/env.json`
 - **XDG_CONFIG_HOME resolution** (in order):
   1. Value of `$XDG_CONFIG_HOME` environment variable (if set)
   2. `~/.config` (on Linux, macOS)
@@ -80,7 +80,7 @@ All flags must appear **before** the `--` separator. Arguments after `--` are pa
 ### Format
 
 ```
-neth-agent [FLAGS] -- COMMAND [ARGS...]
+neith-agent [FLAGS] -- COMMAND [ARGS...]
 ```
 
 ### Available Flags
@@ -89,7 +89,7 @@ neth-agent [FLAGS] -- COMMAND [ARGS...]
 |------|-------------|---------|--------|
 | `--no-env` | Skip environment variable injection | false | Configuration is NOT merged into child environment |
 | `--no-json-output` | Skip JSON file creation | false | Configuration JSON file is NOT written |
-| `--json-output PATH` | Custom path for JSON config file | `$XDG_CONFIG_HOME/neth-agent/env.json` | Implies `--no-json-output` is **disabled** (file will be written) |
+| `--json-output PATH` | Custom path for JSON config file | `$XDG_CONFIG_HOME/neith-agent/env.json` | Implies `--no-json-output` is **disabled** (file will be written) |
 
 ### Flag Ordering
 
@@ -97,8 +97,8 @@ Flags can appear in any order before `--`:
 
 ```sh
 # All equivalent:
-neth-agent --no-env --json-output /tmp/cfg.json -- cmd
-neth-agent --json-output /tmp/cfg.json --no-env -- cmd
+neith-agent --no-env --json-output /tmp/cfg.json -- cmd
+neith-agent --json-output /tmp/cfg.json --no-env -- cmd
 ```
 
 ### Special Behavior
@@ -106,72 +106,72 @@ neth-agent --json-output /tmp/cfg.json --no-env -- cmd
 - **`--json-output` with a value**: If you previously set `--no-json-output`, the `--json-output PATH` flag automatically enables file writing (overrides `--no-json-output`)
   ```sh
   # File WILL be written (--json-output enables it):
-  neth-agent --no-json-output --json-output /tmp/cfg.json -- cmd
+  neith-agent --no-json-output --json-output /tmp/cfg.json -- cmd
   ```
 
 - **Invalid flags**: Unknown flags cause immediate error with exit code `2`
   ```sh
-  neth-agent --unknown-flag -- cmd  # Error: exit code 2
+  neith-agent --unknown-flag -- cmd  # Error: exit code 2
   ```
 
 - **Missing `--` separator**: The separator is **required**. Without it, exit code is `2`
   ```sh
-  neth-agent env          # Error: missing -- separator
-  neth-agent -- env       # OK
+  neith-agent env          # Error: missing -- separator
+  neith-agent -- env       # OK
   ```
 
 - **Missing command after `--`**: The command is required. Using only `--` causes error with exit code `2`
   ```sh
-  neth-agent --          # Error: missing command
-  neth-agent -- env      # OK
+  neith-agent --          # Error: missing command
+  neith-agent -- env      # OK
   ```
 
 ## File Paths and XDG Compliance
 
 ### Default JSON Output Location
 
-neth-agent follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html):
+neith-agent follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html):
 
 ```
-$XDG_CONFIG_HOME/neth-agent/env.json
+$XDG_CONFIG_HOME/neith-agent/env.json
 ```
 
 **Resolution order** (first match wins):
 
-1. **If `$XDG_CONFIG_HOME` is set**: `$XDG_CONFIG_HOME/neth-agent/env.json`
-2. **On Linux/macOS** (fallback): `~/.config/neth-agent/env.json`
-3. **On Windows** (fallback): `%APPDATA%/neth-agent/env.json`
+1. **If `$XDG_CONFIG_HOME` is set**: `$XDG_CONFIG_HOME/neith-agent/env.json`
+2. **On Linux/macOS** (fallback): `~/.config/neith-agent/env.json`
+3. **On Windows** (fallback): `%APPDATA%/neith-agent/env.json`
 
 **Examples**:
 
 | Scenario | Location |
 |----------|----------|
-| Linux, `$XDG_CONFIG_HOME=/opt/conf` | `/opt/conf/neth-agent/env.json` |
-| Linux, `$XDG_CONFIG_HOME` unset | `~/.config/neth-agent/env.json` |
-| macOS, `$XDG_CONFIG_HOME` unset | `~/.config/neth-agent/env.json` |
-| Windows 10, `%APPDATA%=C:\Users\user\AppData\Roaming` | `C:\Users\user\AppData\Roaming/neth-agent/env.json` |
+| Linux, `$XDG_CONFIG_HOME=/opt/conf` | `/opt/conf/neith-agent/env.json` |
+| Linux, `$XDG_CONFIG_HOME` unset | `~/.config/neith-agent/env.json` |
+| macOS, `$XDG_CONFIG_HOME` unset | `~/.config/neith-agent/env.json` |
+| Windows 10, `%APPDATA%=C:\Users\user\AppData\Roaming` | `C:\Users\user\AppData\Roaming/neith-agent/env.json` |
 
 ### Custom Path
 
 Use `--json-output PATH` to override the default location completely. The path can be:
 - Absolute: `/etc/app/config.json`
 - Relative: `./config.json` (relative to current working directory)
-- With variables: `$HOME/my-config.json` (note: **not expanded by neth-agent**, expanded by shell)
+- With variables: `$HOME/my-config.json` (note: **not expanded by neith-agent**, expanded by shell)
 
 ```sh
-# Shell expands $HOME before passing to neth-agent
-neth-agent --json-output $HOME/.config/myapp.json -- cmd
+# Shell expands $HOME before passing to neith-agent
+neith-agent --json-output $HOME/.config/myapp.json -- cmd
 
 # Absolute path
-neth-agent --json-output /etc/app/config.json -- cmd
+neith-agent --json-output /etc/app/config.json -- cmd
 
 # Relative path (relative to current directory)
-neth-agent --json-output ./config/env.json -- cmd
+neith-agent --json-output ./config/env.json -- cmd
 ```
 
 ### Directory Creation
 
-If parent directories don't exist, neth-agent automatically creates them with permissions `0o755` (rwxr-xr-x).
+If parent directories don't exist, neith-agent automatically creates them with permissions `0o755` (rwxr-xr-x).
 
 If directory creation fails (permission denied, read-only filesystem, etc.), the program exits with code `1`.
 
@@ -197,7 +197,7 @@ If environment injection fails (rare), the program also exits with code `1`.
 
 The target process environment is constructed as:
 
-1. **Start with**: All parent environment variables (inherited from neth-agent's parent)
+1. **Start with**: All parent environment variables (inherited from neith-agent's parent)
 2. **Merge in**: All fetched configuration key-value pairs
 3. **Behavior**:
    - New keys from config are **added**
@@ -251,7 +251,7 @@ The config value replaces only the **first** occurrence. The second remains (thi
 
 ## Exit Codes
 
-neth-agent returns specific exit codes for different failure modes. Success returns the target process's exit code.
+neith-agent returns specific exit codes for different failure modes. Success returns the target process's exit code.
 
 | Exit Code | Meaning | Example |
 |-----------|---------|---------|
@@ -265,22 +265,22 @@ neth-agent returns specific exit codes for different failure modes. Success retu
 ### Examples
 
 ```sh
-neth-agent -- true
+neith-agent -- true
 echo $?  # 0 (success)
 
-neth-agent -- false
+neith-agent -- false
 echo $?  # 1 (command returned 1)
 
-neth-agent -- sh -c 'exit 42'
+neith-agent -- sh -c 'exit 42'
 echo $?  # 42 (arbitrary process exit code)
 
-neth-agent --invalid-flag -- true
+neith-agent --invalid-flag -- true
 echo $?  # 2 (flag parsing failed)
 
-neth-agent -- /nonexistent/command
+neith-agent -- /nonexistent/command
 echo $?  # 127 (command not found)
 
-neth-agent --no-json-output --json-output /root/config.json -- true
+neith-agent --no-json-output --json-output /root/config.json -- true
 echo $?  # 1 (permission denied, can't write /root/config.json)
 ```
 
@@ -290,7 +290,7 @@ echo $?  # 1 (permission denied, can't write /root/config.json)
 
 #### Signal Forwarding
 
-When you press Ctrl+C or send another signal to neth-agent, it forwards the signal to the child process **and its entire process group**.
+When you press Ctrl+C or send another signal to neith-agent, it forwards the signal to the child process **and its entire process group**.
 
 **What this means**:
 - `Ctrl+C` kills the child and any grandchildren it spawned
@@ -304,8 +304,8 @@ When you press Ctrl+C or send another signal to neth-agent, it forwards the sign
 #### File Paths
 
 ```
-$XDG_CONFIG_HOME/neth-agent/env.json
-~/.config/neth-agent/env.json        (if XDG_CONFIG_HOME not set)
+$XDG_CONFIG_HOME/neith-agent/env.json
+~/.config/neith-agent/env.json        (if XDG_CONFIG_HOME not set)
 ```
 
 ### Windows Behavior
@@ -328,7 +328,7 @@ Windows doesn't support POSIX signals or process groups. Only `Ctrl+C` (os.Inter
 #### File Paths
 
 ```
-%APPDATA%/neth-agent/env.json        (e.g., C:\Users\user\AppData\Roaming\neth-agent\env.json)
+%APPDATA%/neith-agent/env.json        (e.g., C:\Users\user\AppData\Roaming\neith-agent\env.json)
 ```
 
 If `XDG_CONFIG_HOME` is set (even on Windows), it's still used as the base directory.
@@ -350,14 +350,14 @@ Paths use forward slashes `/` internally (Go standard), which works on all platf
 Inject config and run a command:
 
 ```sh
-neth-agent -- env | grep APP_
+neith-agent -- env | grep APP_
 # Output includes any APP_* variables from config
 ```
 
 ### Example 2: Skip JSON File (Only Environment)
 
 ```sh
-neth-agent --no-json-output -- python my_app.py
+neith-agent --no-json-output -- python my_app.py
 # Config injected as environment variables
 # JSON file not created
 ```
@@ -365,7 +365,7 @@ neth-agent --no-json-output -- python my_app.py
 ### Example 3: Custom JSON Output Location
 
 ```sh
-neth-agent --json-output /tmp/app_config.json -- node server.js
+neith-agent --json-output /tmp/app_config.json -- node server.js
 # JSON written to /tmp/app_config.json
 # Config also injected as environment variables
 ```
@@ -373,7 +373,7 @@ neth-agent --json-output /tmp/app_config.json -- node server.js
 ### Example 4: Only JSON Output (No Environment)
 
 ```sh
-neth-agent --no-env --json-output /etc/app/config.json -- bash -c \
+neith-agent --no-env --json-output /etc/app/config.json -- bash -c \
   'jq . /etc/app/config.json | grep api_key'
 # Config NOT in environment
 # JSON written to /etc/app/config.json
@@ -385,7 +385,7 @@ neth-agent --no-env --json-output /etc/app/config.json -- bash -c \
 For testing or debugging:
 
 ```sh
-neth-agent --no-env --no-json-output -- ps aux
+neith-agent --no-env --no-json-output -- ps aux
 # Runs ps with parent's environment unchanged
 # No config injection at all
 ```
@@ -395,8 +395,8 @@ neth-agent --no-env --no-json-output -- ps aux
 Arguments after the command are passed through:
 
 ```sh
-neth-agent -- curl https://api.example.com --header "X-API-Key: secret"
-# neth-agent: executes curl
+neith-agent -- curl https://api.example.com --header "X-API-Key: secret"
+# neith-agent: executes curl
 # curl: receives --header and X-API-Key argument
 ```
 
@@ -405,7 +405,7 @@ neth-agent -- curl https://api.example.com --header "X-API-Key: secret"
 For shell operators (pipes, redirects), wrap in shell:
 
 ```sh
-neth-agent -- sh -c 'echo $DATABASE_URL | tee config.log'
+neith-agent -- sh -c 'echo $DATABASE_URL | tee config.log'
 # Works because sh parses the whole command line
 ```
 
@@ -413,7 +413,7 @@ neth-agent -- sh -c 'echo $DATABASE_URL | tee config.log'
 
 ```sh
 cd /app
-neth-agent --json-output ./config.json -- node index.js
+neith-agent --json-output ./config.json -- node index.js
 # JSON written to /app/config.json (relative to cwd)
 ```
 
@@ -474,31 +474,31 @@ If parent directories for the JSON file cannot be created:
 - Exit code: `1`
 - Child process is **NOT launched**
 
-**Note**: neth-agent only attempts to create parent directories, not deeper arbitrary paths.
+**Note**: neith-agent only attempts to create parent directories, not deeper arbitrary paths.
 
 ### Command Not Found
 
 If the target command doesn't exist or isn't in `$PATH`:
 - Exit code: `127` (standard shell convention)
 - Configuration was already injected (to environment and/or JSON)
-- No error is printed by neth-agent (just the exit code)
+- No error is printed by neith-agent (just the exit code)
 
 ### Permission Denied
 
 If the target command exists but isn't executable:
 - Exit code: `126` (standard shell convention)
 - Configuration was already injected
-- No error is printed by neth-agent
+- No error is printed by neith-agent
 
 ### Ctrl+C / Signal Handling
 
 When you press Ctrl+C:
-1. neth-agent receives the signal
+1. neith-agent receives the signal
 2. Signal is forwarded to the child process (and process group on Unix)
-3. Both neth-agent and child process terminate
+3. Both neith-agent and child process terminate
 4. Exit code reflects the signal (often 130 for SIGINT, varies by OS)
 
-The mechanism is transparent — neth-agent itself doesn't "catch" Ctrl+C; it proxies signals.
+The mechanism is transparent — neith-agent itself doesn't "catch" Ctrl+C; it proxies signals.
 
 ---
 

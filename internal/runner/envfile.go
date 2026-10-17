@@ -15,7 +15,7 @@ func defaultEnvFilePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "neth-agent", "env.json"), nil
+	return filepath.Join(dir, "neith-agent", "env.json"), nil
 }
 
 func writeEnvFile(path string, env map[string]string) error {

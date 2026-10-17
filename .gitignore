@@ -4,7 +4,7 @@
 *.dll
 *.so
 *.dylib
-neth-agent
+/neith-agent
 
 # Test binary, built with `go test -c`
 *.test

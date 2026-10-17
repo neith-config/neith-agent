@@ -1,6 +1,6 @@
 $schema: https://raw.githubusercontent.com/context-hub/generator/refs/heads/main/json-schema.json
 
-# CTX configuration for neth-agent
+# CTX configuration for neith-agent
 # A Go application that fetches configuration from external sources and injects into child process
 documents:
   - description: "Sidecar daemon, configuration publication, and version store"

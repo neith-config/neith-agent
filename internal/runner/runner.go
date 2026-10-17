@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/neth-config/neth-agent/internal/logger"
+	"github.com/neith-config/neith-agent/internal/logger"
 )
 
 type EnvFetcher interface {
