@@ -21,6 +21,18 @@ func TestMergeEmptyAndInvalidNames(t *testing.T) {
 	}
 }
 
+func TestMergeEnvSingleKeyPaths(t *testing.T) {
+	got := MergeEnv([]string{"A=old"}, map[string]string{"A": "new"}, &testLogger{})
+	if len(got) != 1 || got[0] != "A=new" {
+		t.Fatalf("single-key overlay did not replace existing value: %#v", got)
+	}
+
+	got = MergeEnv([]string{"A=old"}, map[string]string{"B": "new"}, &testLogger{})
+	if len(got) != 2 || got[1] != "B=new" {
+		t.Fatalf("single-key overlay did not append new value: %#v", got)
+	}
+}
+
 func TestWriteEnvFileEncodeError(t *testing.T) {
 	oldOpenFile := openFile
 	defer func() { openFile = oldOpenFile }()

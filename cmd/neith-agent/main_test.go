@@ -14,7 +14,6 @@ import (
 	"github.com/neith-config/neith-agent/internal/agent"
 	"github.com/neith-config/neith-agent/internal/cli"
 	"github.com/neith-config/neith-agent/internal/logger"
-	"github.com/neith-config/neith-agent/internal/runner"
 )
 
 // agentStubForTest creates a stopped agent immediately.
@@ -22,12 +21,8 @@ type agentRunErr struct{ err error }
 
 func (a *agentRunErr) run(_ *agent.Agent) error { return a.err }
 
-// fakeFetcher implements runner.EnvFetcher for tests.
+// fakeFetcher implements the live snapshot fetcher for tests.
 type fakeFetcher struct{ config map[string]string }
-
-func (f *fakeFetcher) Fetch(_ context.Context) (map[string]string, error) {
-	return f.config, nil
-}
 
 func (f *fakeFetcher) FetchSnapshot(_ context.Context) (agent.Snapshot, error) {
 	return agent.Snapshot{Config: f.config}, nil
@@ -65,16 +60,7 @@ func (f *fakeVersionStore) Store(_ int64)  {}
 func (f *fakeVersionStore) Close() error   { return nil }
 
 func TestRun(t *testing.T) {
-	oldRunRunner := runRunner
-	defer func() { runRunner = oldRunRunner }()
-
 	t.Run("version flag", func(t *testing.T) {
-		called := false
-		runRunner = func(_ context.Context, _ runner.EnvFetcher, _ logger.Logger, _ runner.RunConfig) int {
-			called = true
-			return 0
-		}
-
 		var stderr bytes.Buffer
 		oldStdout := os.Stdout
 		r, w, _ := os.Pipe()
@@ -89,9 +75,6 @@ func TestRun(t *testing.T) {
 
 		if code != 0 {
 			t.Fatalf("expected 0, got %d", code)
-		}
-		if called {
-			t.Fatal("did not expect runner to be called")
 		}
 		if !strings.Contains(buf.String(), "neith-agent version:") {
 			t.Fatalf("expected version output, got %q", buf.String())
@@ -320,11 +303,9 @@ func TestRunUsesPrivateVersionFileMode(t *testing.T) {
 func TestMain(t *testing.T) {
 	oldArgs := os.Args
 	oldExit := osExit
-	oldRunRunner := runRunner
 	defer func() {
 		os.Args = oldArgs
 		osExit = oldExit
-		runRunner = oldRunRunner
 	}()
 
 	exitCode := -1

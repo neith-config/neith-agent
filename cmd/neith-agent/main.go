@@ -16,7 +16,6 @@ import (
 	"github.com/neith-config/neith-agent/internal/cli"
 	"github.com/neith-config/neith-agent/internal/config"
 	"github.com/neith-config/neith-agent/internal/logger"
-	"github.com/neith-config/neith-agent/internal/runner"
 )
 
 var Version = "dev"
@@ -63,7 +62,6 @@ EXIT CODES:
   127                     Command not found
   N                       Target process exit code`
 
-var runRunner = runner.Run
 var osExit = os.Exit
 var osOpenFile = os.OpenFile
 var agentNewVersionStore = agent.NewVersionStore

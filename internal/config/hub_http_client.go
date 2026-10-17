@@ -10,7 +10,6 @@ import (
 var readAll = io.ReadAll
 
 // HubHTTPClient fetches a config snapshot from the Hub in a single HTTP request.
-// It implements runner.EnvFetcher and is used for jitter-polling fallback.
 type HubHTTPClient struct {
 	hubURL string
 	token  string

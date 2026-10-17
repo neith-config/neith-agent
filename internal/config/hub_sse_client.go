@@ -116,8 +116,7 @@ func (c *HubSSEClient) Stream(ctx context.Context, onConfig func(map[string]stri
 }
 
 // StreamSnapshots streams revisioned Hub snapshots while preserving the
-// authoritative revision in each callback. The legacy Stream method remains
-// available for disconnected map-based runner components.
+// authoritative revision in each callback.
 func (c *HubSSEClient) StreamSnapshots(ctx context.Context, onSnapshot func(Snapshot)) error {
 	return c.stream(ctx, func(data string) bool {
 		snapshot, err := parseSnapshotEnvelope([]byte(data))

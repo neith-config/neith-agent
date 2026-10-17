@@ -30,7 +30,7 @@ const (
 )
 
 // Snapshot and Revision are the transport metadata accepted by the live
-// agent. Legacy map-based runner interfaces remain separate.
+// agent.
 type Snapshot = hubconfig.Snapshot
 type Revision = hubconfig.Revision
 
