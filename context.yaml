@@ -3,6 +3,20 @@ $schema: https://raw.githubusercontent.com/context-hub/generator/refs/heads/main
 # CTX configuration for neth-agent
 # A Go application that fetches configuration from external sources and injects into child process
 documents:
+  - description: "Sidecar daemon, configuration publication, and version store"
+    outputPath: agent.md
+    overwrite: true
+    tags: [agent, daemon, lifecycle, state]
+    sources:
+      - type: tree
+        description: "Agent implementation and platform-specific shared memory"
+        sourcePaths: ["internal/agent"]
+        filePattern: "*.go"
+        maxDepth: 2
+        showSize: true
+        showCharCount: true
+        notPath: ["**/*_test.go"]
+
   - description: "Main entry point and CLI interface"
     outputPath: main_and_cli.md
     overwrite: true
