@@ -2,6 +2,8 @@ package runner
 
 import (
 	"bytes"
+	"strconv"
+	"sync"
 	"testing"
 )
 
@@ -39,6 +41,63 @@ func TestMergeEnv(t *testing.T) {
 	if seen["B=2"] {
 		t.Fatalf("expected B to be overridden: %#v", got)
 	}
+}
+
+func TestMergeEnvMultiKeyResultsDoNotAlias(t *testing.T) {
+	t.Parallel()
+
+	first := MergeEnv([]string{"BASE=first"}, map[string]string{
+		"FIRST":  "one",
+		"SECOND": "two",
+	}, &testLogger{})
+	_ = MergeEnv([]string{"BASE=second"}, map[string]string{
+		"FIRST":  "three",
+		"SECOND": "four",
+	}, &testLogger{})
+
+	if !hasEnvEntry(first, "BASE=first") || !hasEnvEntry(first, "FIRST=one") || !hasEnvEntry(first, "SECOND=two") {
+		t.Fatalf("first result was mutated by a later merge: %#v", first)
+	}
+}
+
+func TestMergeEnvConcurrentResultsRemainOwned(t *testing.T) {
+	const calls = 32
+
+	results := make([][]string, calls)
+	var wg sync.WaitGroup
+	wg.Add(calls)
+	for i := 0; i < calls; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			results[i] = MergeEnv(
+				[]string{"BASE=" + strconv.Itoa(i)},
+				map[string]string{
+					"VALUE":  strconv.Itoa(i),
+					"SECOND": strconv.Itoa(i + calls),
+				},
+				&testLogger{},
+			)
+		}()
+	}
+	wg.Wait()
+
+	for i, result := range results {
+		if !hasEnvEntry(result, "BASE="+strconv.Itoa(i)) ||
+			!hasEnvEntry(result, "VALUE="+strconv.Itoa(i)) ||
+			!hasEnvEntry(result, "SECOND="+strconv.Itoa(i+calls)) {
+			t.Fatalf("result %d was corrupted by another merge: %#v", i, result)
+		}
+	}
+}
+
+func hasEnvEntry(env []string, want string) bool {
+	for _, entry := range env {
+		if entry == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestMergeEnv_ExtraOverridesBase(t *testing.T) {
