@@ -33,7 +33,7 @@ func TestMergeEnvSingleKeyPaths(t *testing.T) {
 	}
 }
 
-func TestWriteEnvFileEncodeError(t *testing.T) {
+func TestWriteEnvFileEncodeErrorFromCoverage(t *testing.T) {
 	oldOpenFile := openFile
 	defer func() { openFile = oldOpenFile }()
 
@@ -50,7 +50,7 @@ func TestWriteEnvFileEncodeError(t *testing.T) {
 	}
 }
 
-func TestExportedEnvFileContracts(t *testing.T) {
+func TestExportedEnvFileContractsFromCoverage(t *testing.T) {
 	oldUserConfigDir := userConfigDir
 	defer func() { userConfigDir = oldUserConfigDir }()
 
